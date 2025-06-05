@@ -1,0 +1,90 @@
+{
+  "nouns": {
+    "common": {
+      "people": [
+        "teacher",
+        "doctor",
+        "student",
+        "parent",
+        "friend",
+        "child",
+        "worker",
+        "driver",
+        "police",
+        "neighbor",
+        "dog"
+      ],
+      "places": [
+        "home",
+        "school",
+        "office",
+        "market",
+        "hospital",
+        "park",
+        "restaurant",
+        "station",
+        "bank",
+        "store"
+      ],
+      "things": [
+        "phone",
+        "car",
+        "chair",
+        "table",
+        "pen",
+        "book",
+        "bag",
+        "key",
+        "bottle",
+        "shoes",
+        "apple",
+        "cup",
+        "door",
+        "flower",
+        "perfume",
+        "bell",
+        "rain",
+        "sandwich",
+        "glass",
+        "clock"
+      ]
+    },
+    "abstract": [
+      "freedom",
+      "honesty",
+      "love",
+      "anger",
+      "knowledge",
+      "hope",
+      "bravery",
+      "intelligence",
+      "justice",
+      "happiness",
+      "idea"
+    ],
+    "uncountable": [
+      "water",
+      "milk",
+      "sand",
+      "sugar",
+      "flour",
+      "air",
+      "information",
+      "rice",
+      "oil",
+      "music"
+    ],
+    "collective": [
+      "team",
+      "family",
+      "audience",
+      "flock",
+      "group",
+      "committee",
+      "herd",
+      "crowd",
+      "class",
+      "pack"
+    ]
+  }
+}
