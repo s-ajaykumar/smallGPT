@@ -2,89 +2,136 @@
   "nouns": {
     "common": {
       "people": [
-        "teacher",
-        "doctor",
-        "student",
-        "parent",
-        "friend",
-        "child",
-        "worker",
-        "driver",
-        "police",
-        "neighbor",
-        "dog"
+        "teacher", "doctor", "student", "parent", "friend",
+        "child", "worker", "driver", "police", "mom"
       ],
       "places": [
-        "home",
-        "school",
-        "office",
-        "market",
-        "hospital",
-        "park",
-        "restaurant",
-        "station",
-        "bank",
-        "store"
+        "home", "school", "office", "market", "hospital",
+        "park", "restaurant", "station", "bank", "store"
       ],
       "things": [
-        "phone",
-        "car",
-        "chair",
-        "table",
-        "pen",
-        "book",
-        "bag",
-        "key",
-        "bottle",
-        "shoes",
-        "apple",
-        "cup",
-        "door",
-        "flower",
-        "perfume",
-        "bell",
-        "rain",
-        "sandwich",
-        "glass",
-        "clock"
+        "phone", "car", "chair", "table", "pen",
+        "book", "bag", "key", "bottle", "shoes",
+        "apple", "cup", "door", "remote", "lunchbox",
+        "bread", "notebook", "bed", "cupboard"
       ]
     },
     "abstract": [
-      "freedom",
-      "honesty",
-      "love",
-      "anger",
-      "knowledge",
-      "hope",
-      "bravery",
-      "intelligence",
-      "justice",
-      "happiness",
-      "idea"
+      "freedom", "honesty", "love", "anger", "knowledge",
+      "hope", "care", "happiness", "fear", "respect"
     ],
     "uncountable": [
-      "water",
-      "milk",
-      "sand",
-      "sugar",
-      "flour",
-      "air",
-      "information",
-      "rice",
-      "oil",
-      "music"
+      "water", "milk", "sand", "sugar", "flour",
+      "air", "information", "rice", "oil", "money"
     ],
     "collective": [
-      "team",
-      "family",
-      "audience",
-      "flock",
-      "group",
-      "committee",
-      "herd",
-      "crowd",
-      "class",
-      "pack"
+      "team", "family", "group", "crowd", "class",
+      "staff", "audience", "crew", "bunch", "pair"
+    ]
+  },
+  "verbs": {
+    "action": [
+      "eat", "drink", "run", "walk", "read",
+      "write", "sleep", "cook", "clean", "drive",
+      "talk", "call", "play", "open", "close"
+    ],
+    "linking": [
+      "am", "is", "are", "was", "were",
+      "seem", "become", "feel", "look", "sound"
+    ],
+    "auxiliary": [
+      "can", "could", "will", "would", "shall",
+      "should", "may", "might", "must", "have"
+    ]
+  },
+  "adjectives": {
+    "descriptive": [
+      "happy", "sad", "tall", "short", "big",
+      "small", "clean", "dirty", "hot", "cold"
+    ],
+    "quantitative": [
+      "some", "many", "few", "several", "much",
+      "enough", "two", "ten", "all", "most"
+    ],
+    "demonstrative": [
+      "this", "that", "these", "those"
+    ]
+  },
+  "adverbs": {
+    "place": [
+      "here", "there", "inside", "outside", "upstairs",
+      "downstairs", "nearby", "everywhere", "anywhere", "far"
+    ],
+    "manner": [
+      "quickly", "slowly", "softly", "loudly", "neatly",
+      "badly", "easily", "happily", "sadly", "carefully"
+    ],
+    "time": [
+      "now", "today", "yesterday", "tomorrow", "soon",
+      "late", "early", "always", "often", "sometimes"
+    ]
+  },
+  "pronouns": {
+    "personal": [
+      "I", "you", "he", "she", "it",
+      "we", "they", "me", "him", "her",
+      "us", "them"
+    ],
+    "indefinite": [
+      "someone", "everyone", "anyone", "somebody", "everybody",
+      "anybody", "nobody", "something", "everything"
+    ]
+  },
+  "prepositions": {
+    "place": [
+      "in", "on", "under", "over", "above",
+      "below", "behind", "between", "near", "at"
+    ],
+    "time": [
+      "before", "after", "during", "since", "until",
+      "by", "from", "at", "on", "in"
+    ],
+    "direction": [
+      "to", "into", "onto", "out of", "towards",
+      "through", "across", "along", "around", "off"
+    ]
+  },
+  "conjunctions": {
+    "coordinative": [
+      "and", "but", "or", "so", "for", "yet", "nor"
+    ],
+    "subordinative": [
+      "because", "although", "if", "when", "while",
+      "since", "unless", "before", "after", "though"
+    ]
+  },
+  "interjections": {
+    "emotive": [
+      "wow", "ouch", "oh no", "yay", "ugh",
+      "whoa", "oops", "oh dear", "aah", "ew"
+    ],
+    "volative": [
+      "hey", "shh", "look out", "hurry", "wait",
+      "listen", "stop", "go", "come on", "move"
+    ],
+    "cognitive": [
+      "hmm", "oh", "aha", "huh", "well",
+      "hmmm", "erm", "uh", "okay", "alright"
+    ]
+  },
+  "punctuations": [
+    ".", ",", "?", "!", ":", ";", "-", "'", "\"", "..."
+  ],
+  "numbers": {
+    "digits": [
+      "0", "1", "2", "3", "4", "5", "6", "7", "8", "9"
+    ],
+    "words": [
+      "zero", "one", "two", "three", "four",
+      "five", "six", "seven", "eight", "nine",
+      "ten", "twenty", "thirty", "forty", "fifty",
+      "sixty", "seventy", "eighty", "ninety", "hundred",
+      "thousand", "lakh", "crore"
     ]
   }
 }
