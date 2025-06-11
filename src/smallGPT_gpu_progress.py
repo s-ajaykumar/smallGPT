@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
+torch.manual_seed(1337)
 
 
 class Config:
@@ -19,7 +19,7 @@ class Config:
     n_heads = 2
     n_layers = 2
     c_block_size = 24        # The longest word in the shakesphere dataset.
-    w_block_size = 10
+    w_block_size = 16
     dropout_ratio = 0.2
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     pad_token = vocab.stoi['<pad>']
@@ -30,6 +30,28 @@ class Config:
 
 
 
+def pad(x):
+    padded_samples = []
+    words_idx_end = []
+    
+    for sample in x:
+        padded_sample = []
+        word_idx_end = []
+        
+        for word in sample:
+            diff = config.c_block_size - len(word)
+            if diff == 0:
+                padded_sample.append(word)
+                word_idx_end.append(len(word) - 1)
+            else:
+                pad_seq = [config.pad_token] * diff
+                word_idx_end.append(len(word) - 1)
+                word = word + pad_seq
+                padded_sample.append(word)
+                
+        words_idx_end.append(word_idx_end)        
+        padded_samples.append(padded_sample)
+    return torch.tensor(padded_samples, dtype=torch.long), torch.tensor(words_idx_end, dtype=torch.long)
 
 def get_batch(mode):
     if mode == 'train':
@@ -37,12 +59,12 @@ def get_batch(mode):
     else:
         x, y = xval, yval
 
-    ix = [random.randint(0, len(x)-1) for _ in range(config.batch_size)]
-    xb = [x[i] for i in ix]
-    yb = [y[i] for i in ix]
+    ix = [random.randint(0, len(x)-config.w_block_size) for _ in range(config.batch_size)]
+    xb = [x[i : i+config.w_block_size] for i in ix]
+    yb = [y[i : i+config.w_block_size] for i in ix]
     xb, xb_end_idx = pad(xb)
     yb, yb_end_idx = pad(yb)
-    xb, yb, xb_end_idx, yb_end_idx = xb.to(config.device), yb.to(config.device), xb_end_idx.to(config.device), yb_end_idx.to(config.device)
+    xb, yb, xb_end_idx, yb_end_idx = xb.to(config.device), yb.to(config.device), xb_end_idx.to(config.device), yb_end_idx
     return xb, yb, xb_end_idx, yb_end_idx
     
 @torch.no_grad()    
@@ -53,8 +75,8 @@ def estimate_loss():
     for split in splits:
         losses = []
         for i in range(config.eval_iters):
-            xb, yb, xb_end_idx, yb_end_idx = get_batch('train')
-            logits, loss = model(xb, yb, xb_end_idx, yb_end_idx)
+            xb, yb, x_end_idx, yb_end_idx = get_batch(split)
+            logits, loss = model(xb, x_end_idx, yb)
             losses.append(loss.item())
         out[split] = sum(losses) / len(losses)
     model.train()
@@ -78,25 +100,16 @@ processed_data = re.findall(r'\S+,?\s+|\S+,|\S+\s+', data)
 encoded_data = []
 for word in processed_data:
     encoded_data.append(encode(word))
- 
-## Shaping samples of block_size
-start_idx = 0
-x_samples = []
-y_samples=  []
-x_encoded_data = encoded_data[:-1]
-y_encoded_data = encoded_data[1:]
-
-while start_idx+config.batch_size <= len(x_encoded_data):
-    x_samples.append(x_encoded_data[start_idx : start_idx+config.batch_size])
-    y_samples.append(y_encoded_data[start_idx : start_idx+config.batch_size])
-    start_idx += 1
 
 ## Splitting into train and validation sets
-split = int(len(x_samples) * 0.9)
-xtr, ytr = x_samples[:split], y_samples[:split]
-xval, yval = x_samples[split:], y_samples[split:]
+split = int(len(encoded_data) * 0.9)
+train_data = encoded_data[:split]
+val_data = encoded_data[split:]
+xtr, ytr = train_data[:-1], train_data[1:]  
+xval, yval = val_data[:-1], val_data[1:]
 print("-"*70, "\nTOTAL SAMPLES:\n", "-"*70)
 print(f"Xtr : {len(xtr)} samples\tYtr : {len(ytr)} samples\nXval : {len(xval)} samples\tYval : {len(yval)} samples\n\n")
+
 
 
 
@@ -109,7 +122,7 @@ class CharAttention(nn.Module):
         self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias = False)
         self.dropout = nn.Dropout(config.dropout_ratio)
         
-    def forward(self, x):
+    def forward(self, x, x_end_idx):
         B, W, c, C = x.shape
         
         qkv = self.attn(x)
@@ -123,8 +136,17 @@ class CharAttention(nn.Module):
         out = self.c_proj(out)
         out = self.dropout(out)
         out = x + out             # Residual connection
-        out = out[:, :, -1, :]    # B, W, C
-        return out
+        
+        
+        samples = []
+        for i, s in enumerate(out):
+            words = []
+            for j, word in enumerate(s):
+                end_idx = x_end_idx[i, j]
+                words.append(word[end_idx])
+            samples.append(torch.stack(words, dim = 0))
+        samples = torch.stack(samples, dim = 0)
+        return samples            # B, W, C
 
 
 
@@ -198,8 +220,6 @@ class GPT(nn.Module):
         self.c_attn = CharAttention()
         self.h = nn.ModuleList([Block() for _ in range(config.n_layers)])
         self.lm_heads = nn.ModuleList([nn.Linear(config.n_embd, config.vocab_size) for _ in range(config.c_block_size)])
-        self.xb_end_idx = None
-        self.yb_end_idx = None
 
         self.apply(self.init_weights)
 
@@ -214,17 +234,14 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean = 0.0, std = 0.02)
         
-    def forward(self, x, xb_end_idx, targets = None, yb_end_idx = None):
-        self.xb_end_idx = xb_end_idx
-        
+    def forward(self, x, x_end_idx, targets = None):
         B, W, c = x.shape               # B, W, c   
         c_emb = self.cte(x)             # B, W, c, C
         
         c_pos_emb = self.cpe(torch.arange(c, dtype = torch.long, device = config.device))   # Character pos encoding
         x = c_emb + c_pos_emb
 
-        x = self.c_attn(x)          # Character attention   -> returns B, W, C
-
+        x = self.c_attn(x, x_end_idx)          # Character attention   -> returns B, W, C
         pos_emb = self.wpe(torch.arange(W, dtype = torch.long, device = config.device))     # Word pos encoding
         x = x + pos_emb
 
@@ -244,22 +261,11 @@ class GPT(nn.Module):
             loss = F.cross_entropy(logits, targets, ignore_index = config.pad_token)
         return logits, loss
 
-    def pad(self, x):
-        padded_samples = []
-    
-        for word in x:
-            diff = config.c_block_size - len(word)
-            if diff == 0:
-                padded_samples.append(word)
-            else:
-                pad_seq = torch.full((diff,), config.pad_token)
-                word = torch.cat((word, pad_seq), dim = -1)
-                padded_samples.append(word)
-        return torch.stack(padded_samples, dim = 0).unsqueeze(1)
-
-    def generate(self, x, x_end_idx, max_new_words):      # x - shape: B, W, c 
+    def generate(self, x, x_end_ix, max_new_words):      # x - shape: B, W, c 
         for i in range(max_new_words):
-            logits, loss = model(x, x_end_idx)
+            x_slided = x[:, -config.w_block_size:, :]
+            x_end_ix_slided = x_end_ix[:, -config.w_block_size:]  # B, W, c
+            logits, loss = self(x_slided, x_end_ix_slided)
             logits = logits[:, -1, :, :]
             B, c_block_size, vocab_size = logits.shape
             
@@ -268,23 +274,20 @@ class GPT(nn.Module):
             ix = torch.multinomial(probs, num_samples = 1)
             ix = ix.view(B, c_block_size)
 
-            next_word_batch = []
+            word_end_ix = []
             for b in ix:
-                stop_ix = None
-                for i, element in enumerate(b):
+                end_ix = len(b) - 1
+                for j, element in enumerate(b):
                     if element in [77, 78]:
-                        stop_ix = i
+                        end_ix = j
                         break
-                if stop_ix:
-                    next_word = b[:stop_ix+1]
-                else:
-                    next_word = b[:c_block_size]
-                next_word_batch.append(next_word)
-            next_words = self.pad(next_word_batch)
-            x = torch.stack((x, next_words), dim = 1)  # Concatenate along the word dimension
-            print(x.shape, x)
-            return
-        return x
+                word_end_ix.append(end_ix)
+             
+            ix = ix.unsqueeze(1)
+            x = torch.cat((x, ix), dim = 1)             # Concatenate along the word dimension
+            word_end_ix = torch.tensor(word_end_ix, dtype = torch.long, device = config.device).unsqueeze(1)
+            x_end_ix = torch.cat((x_end_ix, word_end_ix), dim = 1)
+        return x, x_end_ix
 
         
 
@@ -296,16 +299,10 @@ print("-"*70, "\nMODEL INFO:\n", "-"*70)
 print(f"model parameters : \t{sum([p.nelement() for p in model.parameters()]) / 1e6 : .3f}M parameters\n\n")   
 
 
-x = torch.cat((torch.tensor([45, 7, 4], dtype = torch.long, device = config.device), torch.full((21, ), config.pad_token)), dim = -1)
-x_end_idx = torch.tensor([2], dtype = torch.long, device = config.device).unsqueeze(0)  # B, c
-out = model.generate(x, x_end_idx, 15)
-for sample in out:
-    for word in sample:
-        print(decode(word.tolist()), end = '')
-    print("\n\n")
+
 
 # Model Training
-'''optimizer = torch.optim.AdamW(model.parameters(), lr = config.lr)
+optimizer = torch.optim.AdamW(model.parameters(), lr = config.lr)
 
 t1 = time.time()
 for iter in range(config.max_iters):
@@ -314,8 +311,8 @@ for iter in range(config.max_iters):
         print(f"iter {iter}:\ttrain_loss: {losses['train']}\tval_loss: {losses['val']}")
         
     ## Forward pass
-    xb, yb = get_batch('train')
-    logits, loss = model(xb, yb)
+    xb, yb, x_end_ix, y_end_ix = get_batch('train')
+    logits, loss = model(xb, x_end_ix, yb)
     
     ## Backward pass
     optimizer.zero_grad(set_to_none = True)
@@ -325,5 +322,23 @@ for iter in range(config.max_iters):
     optimizer.step()
 
 t2 = time.time()
-print("Time taken:\t", (t2-t1), "s\t", (t2-t1)/1000, "m")'''
+print("Time taken:\t", (t2-t1), "s\t", (t2-t1)/60, "m")
+
+
+
+
+
+# Inference
+for i in range(2):
+    x = torch.cat((torch.tensor([45, 7, 4], dtype = torch.long, device = config.device), torch.full((21, ), config.pad_token)), dim = -1).unsqueeze(0).unsqueeze(0)
+    x_end_idx = torch.tensor([2], dtype = torch.long, device = config.device).unsqueeze(0)  # B, W
+    out, out_end_ix = model.generate(x, x_end_idx, 15)  # B, W, c
+    
+    ## Decode
+    print(f"SAMPLE {i}: ")
+    for m, sample in enumerate(out):
+        for n, word in enumerate(sample):
+            end_ix = out_end_ix[m, n]
+            print(decode(word[:end_ix+1].tolist()), end = '')
+    print("\n\n")
     

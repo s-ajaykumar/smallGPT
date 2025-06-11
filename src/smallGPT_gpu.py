@@ -14,19 +14,19 @@ import torch.nn.functional as F
 class Config:
     batch_size = 4
     vocab_size = len(vocab.itos) 
-    n_embd = 32
+    n_embd = 64
     n_hidden = 4*n_embd
-    n_heads = 2
-    n_layers = 2
+    n_heads = 4
+    n_layers = 4
     c_block_size = 24        # The longest word in the shakesphere dataset.
     w_block_size = 10
     dropout_ratio = 0.2
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     pad_token = vocab.stoi['<pad>']
     lr = 4e-3
-    max_iters = 1001
+    max_iters = 5001
     eval_iters = 200
-    eval_interval = 100
+    eval_interval = 500
 
 
 
@@ -75,7 +75,7 @@ def estimate_loss():
     for split in splits:
         losses = []
         for i in range(config.eval_iters):
-            xb, yb, x_end_idx, yb_end_idx = get_batch('train')
+            xb, yb, x_end_idx, yb_end_idx = get_batch(split)
             logits, loss = model(xb, x_end_idx, yb)
             losses.append(loss.item())
         out[split] = sum(losses) / len(losses)
@@ -108,9 +108,9 @@ y_samples=  []
 x_encoded_data = encoded_data[:-1]
 y_encoded_data = encoded_data[1:]
 
-while start_idx+config.batch_size <= len(x_encoded_data):
-    x_samples.append(x_encoded_data[start_idx : start_idx+config.batch_size])
-    y_samples.append(y_encoded_data[start_idx : start_idx+config.batch_size])
+while start_idx+config.w_block_size <= len(x_encoded_data):
+    x_samples.append(x_encoded_data[start_idx : start_idx+config.w_block_size])
+    y_samples.append(y_encoded_data[start_idx : start_idx+config.w_block_size])
     start_idx += 1
 
 ## Splitting into train and validation sets
@@ -229,8 +229,6 @@ class GPT(nn.Module):
         self.c_attn = CharAttention()
         self.h = nn.ModuleList([Block() for _ in range(config.n_layers)])
         self.lm_heads = nn.ModuleList([nn.Linear(config.n_embd, config.vocab_size) for _ in range(config.c_block_size)])
-        self.xb_end_idx = None
-        self.yb_end_idx = None
 
         self.apply(self.init_weights)
 
@@ -276,7 +274,7 @@ class GPT(nn.Module):
         for i in range(max_new_words):
             x_slided = x[:, -config.w_block_size:, :]
             x_end_ix_slided = x_end_ix[:, -config.w_block_size:]  # B, W, c
-            logits, loss = model(x_slided, x_end_ix_slided)
+            logits, loss = self(x_slided, x_end_ix_slided)
             logits = logits[:, -1, :, :]
             B, c_block_size, vocab_size = logits.shape
             
@@ -287,16 +285,17 @@ class GPT(nn.Module):
 
             word_end_ix = []
             for b in ix:
-                for i, element in enumerate(b):
-                    end_ix = i
+                end_ix = len(b) - 1
+                for j, element in enumerate(b):
                     if element in [77, 78]:
+                        end_ix = j
                         break
                 word_end_ix.append(end_ix)
              
             ix = ix.unsqueeze(1)
             x = torch.cat((x, ix), dim = 1)             # Concatenate along the word dimension
-            word_end_ix = torch.tensor(word_end_ix, dtype = torch.long, device = config.device).unsqueeze(0)
-            x_end_ix = torch.cat((x_end_ix, word_end_ix), dim = -1)
+            word_end_ix = torch.tensor(word_end_ix, dtype = torch.long, device = config.device).unsqueeze(1)
+            x_end_ix = torch.cat((x_end_ix, word_end_ix), dim = 1)
         return x, x_end_ix
 
         
@@ -312,7 +311,7 @@ print(f"model parameters : \t{sum([p.nelement() for p in model.parameters()]) / 
 
 
 # Model Training
-optimizer = torch.optim.AdamW(model.parameters(), lr = config.lr)
+'''optimizer = torch.optim.AdamW(model.parameters(), lr = config.lr)
 
 t1 = time.time()
 for iter in range(config.max_iters):
@@ -332,7 +331,7 @@ for iter in range(config.max_iters):
     optimizer.step()
 
 t2 = time.time()
-print("Time taken:\t", (t2-t1), "s\t", (t2-t1)/1000, "m")
+print("Time taken:\t", (t2-t1), "s\t", (t2-t1)/1000, "m")'''
 
 
 

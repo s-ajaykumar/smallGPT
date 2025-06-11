@@ -31,9 +31,54 @@ TEST 1:
 
 CONFIG:
 -------
+batch_size = 8
+vocab_size = len(vocab.itos) 
+n_embd = 64
+n_hidden = 4*n_embd
+n_heads = 2
+n_layers = 2
+c_block_size = 24        # The longest word in the shakesphere dataset.
+w_block_size = 32
+dropout_ratio = 0.2
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+pad_token = vocab.stoi['<pad>']
+lr = 4e-3
+max_iters = 5001
+eval_iters = 200
+eval_interval = 500
+
+
+STATS
+-----
+iter 5000:	train_loss: 2.6460533750057222	val_loss: 2.721978613138199
+Time taken:	 181.33913159370422 s	 0.1813391315937042 m                 
+
+
+
+INFERENCE RESULTS
+-----------------
+
+SAMPLE 0: 
+Theba cowll b dooprn ioun! Oed ioae,,e,e
+I wa ni hedcne io dhoee hathsr
+Miat 
+
+
+SAMPLE 1: 
+Thewiicgs ofiee mhw ie ooa bi
+Wfsilret tod aeik,n fud teesit tttme otdhe mo tice
+
+
+
+
+TEST 2
+------
+
+CONFIG
+------
 batch_size = 4
 vocab_size = len(vocab.itos) 
-n_embd = 32
+n_embd = 64
 n_hidden = 4*n_embd
 n_heads = 2
 n_layers = 2
@@ -43,33 +88,74 @@ dropout_ratio = 0.2
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 pad_token = vocab.stoi['<pad>']
 lr = 4e-3
-max_iters = 1001
+max_iters = 5001
 eval_iters = 200
-eval_interval = 100
+eval_interval = 500
+
 
 
 STATS
 -----
-iter 1000:      train_loss: 2.8410885298252104  val_loss: 2.8463186037540438
-Time taken:      28.793780088424683 s    0.028793780088424682 m
+iter 5000:      train_loss: 2.739094648361206   val_loss: 2.762135897874832
+Time taken:      251.83625078201294 s    4.2                                   # On my cpu
 
 
 
 INFERENCE RESULTS
 -----------------
+SAMPLE 0: 
+Thehoit
 
-SAMPLE 0:
---------- 
-Thet'esoa 3lerea toetst.
-WLL kh-ct hn
-KEF, IS:EOAUR:RL
-AFa ''RH
-Lo. LEeEUuST:An:
-Tem, splm hhtu,.mm 
+
+SAMPLE 1:
+Thegocsa asdveca
+she taoueb-sd
+&L
+AmNWEeIBo$d gu saah ieu htrtutwg.
+Mus ft toag, Mfutlag,w cfkrt::fn!w
+
+
+
+
+TEST 3
+------
+
+
+CONFIG
+------
+batch_size = 8
+vocab_size = len(vocab.itos) 
+n_embd = 64
+n_hidden = 4*n_embd
+n_heads = 4
+n_layers = 4
+c_block_size = 24        # The longest word in the shakesphere dataset.
+w_block_size = 10
+dropout_ratio = 0.2
+device = 'cuda'  if torch.cuda.is_available() else 'cpu'
+pad_token = vocab.stoi['<pad>']
+lr = 4e-3
+max_iters = 10001
+eval_iters = 200
+eval_interval = 1000
+
+
+
+STATS
+-----
+iter 10000:	train_loss: 2.6760646080970765	val_loss: 2.6713756573200227
+Time taken:	 203.18450832366943 s	 3.5 m                                  # On google T4 gpu
+
+
+
+INFERENCE RESULTS
+-----------------
+SAMPLE 0: 
+Thelfurs Oiwpwury,
+The frrs ih'nseuu iics- shueya
+Tcec in ohb wir oigt co bnndoLu Iha 
 
 
 SAMPLE 1: 
----------
-Themla,iD
-BhiC heoo ha safss Hm'eim au gems mhuses beak lelh
-S shrt. NON'OsE: EDPICwBSO
+Themaplo baouo,. Bhis thoi sgm tag oorm;e
+Wids cnl tngp f Gabsinbd, mloe thcs fop 
