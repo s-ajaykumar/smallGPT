@@ -3,6 +3,7 @@ import vocab as vocab
 import re
 import random
 import time
+from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
@@ -10,23 +11,23 @@ import torch.nn.functional as F
 
 torch.manual_seed(1337)
 
-
+@dataclass
 class Config:
-    batch_size = 4
+    batch_size = 1
     vocab_size = len(vocab.itos) 
-    n_embd = 32
+    n_embd = 2
     n_hidden = 4*n_embd
-    n_heads = 2
-    n_layers = 2
+    n_heads = 1
+    n_layers = 1
     c_block_size = 24        # The longest word in the shakesphere dataset.
-    w_block_size = 16
+    w_block_size = 4
     dropout_ratio = 0.2
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     pad_token = vocab.stoi['<pad>']
     lr = 4e-3
-    max_iters = 1001
+    max_iters = 8001
     eval_iters = 200
-    eval_interval = 100
+    eval_interval = 800
 
 
 
@@ -108,21 +109,37 @@ print(f"Xtr : {len(xtr)} samples\tYtr : {len(ytr)} samples\nXval : {len(xval)} s
 
 
 
+@dataclass
+class Current_Conv:
+    context = None
+
+
 
 # Attention cpu version
 class CharAttention(nn.Module):
     def __init__(self):
         super().__init__()
-        self.v = nn.Linear(config.n_embd, config.n_embd, bias = False)
+        self.v_proj = nn.Linear(config.n_embd, config.n_embd, bias = False)
         self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias = False)
         self.dropout = nn.Dropout(config.dropout_ratio)
         
     def forward(self, x, attention_mask):
         B, W, c, C = x.shape
-        out = self.v(x)
+        last_ix = attention_mask.sum(dim = 2) - 1
+
+        out = self.v_proj(x)
+        if current_conv.context is None:
+            b_temp = []
+            for b in range(B):
+                w_temp = []
+                for w in range(W):
+                    w_temp.append(out[b:b+1, w:w+1, :last_ix[b, w], :])
+                    print(out[b:b+1, w:w+1, :last_ix[b, w], :].shape)
+                return
+            current_conv.context = out[B, W, :last_ix]
         out = out * attention_mask.unsqueeze(-1)
         
-        out = out.sum(dim = 2)  # B, W, C
+        out = out.mean(dim = 2)  # B, W, C
         out = self.c_proj(out)
         out = self.dropout(out)
         return out
@@ -214,7 +231,7 @@ class GPT(nn.Module):
             torch.nn.init.normal_(module.weight, mean = 0.0, std = 0.02)
         
     def forward(self, x, attention_mask, targets = None):
-        B, W, c = x.shape               # B, W, c   
+        B, W, c = x.shape               # B, W, c  
         c_emb = self.cte(x)             # B, W, c, C
         
         c_pos_emb = self.cpe(torch.arange(c, dtype = torch.long, device = config.device))   # Character pos encoding
@@ -288,10 +305,13 @@ model = model.to(config.device)
 print("-"*70, "\nMODEL INFO:\n", "-"*70)
 print(f"model parameters : \t{sum([p.nelement() for p in model.parameters()]) / 1e6 : .3f}M parameters\n\n")   
 
+current_conv = Current_Conv()
 
+xb, yb = get_batch('train')
+attention_mask = (xb != config.pad_token).int()  # B, W, c
+model(xb, attention_mask, yb)  # Forward pass to check if the model is working fine
 
-
-# Model Training
+'''# Model Training
 optimizer = torch.optim.AdamW(model.parameters(), lr = config.lr)
 
 t1 = time.time()
@@ -332,5 +352,5 @@ for i in range(2):
         for n, word in enumerate(sample):
             end_ix = out_end_ix[m, n]
             print(decode(word[:end_ix+1].tolist()), end = '')
-    print("\n\n")
+    print("\n\n")'''
     
