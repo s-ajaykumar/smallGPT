@@ -8,25 +8,25 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
+torch.manual_seed(1337)
 
 
 class Config:
     batch_size = 4
     vocab_size = len(vocab.itos) 
-    n_embd = 64
+    n_embd = 32
     n_hidden = 4*n_embd
-    n_heads = 4
-    n_layers = 4
+    n_heads = 2
+    n_layers = 2
     c_block_size = 24        # The longest word in the shakesphere dataset.
-    w_block_size = 10
+    w_block_size = 16
     dropout_ratio = 0.2
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     pad_token = vocab.stoi['<pad>']
     lr = 4e-3
-    max_iters = 5001
+    max_iters = 1001
     eval_iters = 200
-    eval_interval = 500
+    eval_interval = 100
 
 
 
@@ -59,12 +59,12 @@ def get_batch(mode):
     else:
         x, y = xval, yval
 
-    ix = [random.randint(0, len(x)-1) for _ in range(config.batch_size)]
-    xb = [x[i] for i in ix]
-    yb = [y[i] for i in ix]
+    ix = [random.randint(0, len(x)-config.w_block_size) for _ in range(config.batch_size)]
+    xb = [x[i : i+config.w_block_size] for i in ix]
+    yb = [y[i : i+config.w_block_size] for i in ix]
     xb, xb_end_idx = pad(xb)
     yb, yb_end_idx = pad(yb)
-    xb, yb, xb_end_idx, yb_end_idx = xb.to(config.device), yb.to(config.device), xb_end_idx.to(config.device), yb_end_idx.to(config.device)
+    xb, yb, xb_end_idx, yb_end_idx = xb.to(config.device), yb.to(config.device), xb_end_idx.to(config.device), yb_end_idx
     return xb, yb, xb_end_idx, yb_end_idx
     
 @torch.no_grad()    
@@ -100,25 +100,16 @@ processed_data = re.findall(r'\S+,?\s+|\S+,|\S+\s+', data)
 encoded_data = []
 for word in processed_data:
     encoded_data.append(encode(word))
- 
-## Shaping samples of block_size
-start_idx = 0
-x_samples = []
-y_samples=  []
-x_encoded_data = encoded_data[:-1]
-y_encoded_data = encoded_data[1:]
-
-while start_idx+config.w_block_size <= len(x_encoded_data):
-    x_samples.append(x_encoded_data[start_idx : start_idx+config.w_block_size])
-    y_samples.append(y_encoded_data[start_idx : start_idx+config.w_block_size])
-    start_idx += 1
 
 ## Splitting into train and validation sets
-split = int(len(x_samples) * 0.9)
-xtr, ytr = x_samples[:split], y_samples[:split]
-xval, yval = x_samples[split:], y_samples[split:]
+split = int(len(encoded_data) * 0.9)
+train_data = encoded_data[:split]
+val_data = encoded_data[split:]
+xtr, ytr = train_data[:-1], train_data[1:]  
+xval, yval = val_data[:-1], val_data[1:]
 print("-"*70, "\nTOTAL SAMPLES:\n", "-"*70)
 print(f"Xtr : {len(xtr)} samples\tYtr : {len(ytr)} samples\nXval : {len(xval)} samples\tYval : {len(yval)} samples\n\n")
+
 
 
 
@@ -311,7 +302,7 @@ print(f"model parameters : \t{sum([p.nelement() for p in model.parameters()]) / 
 
 
 # Model Training
-'''optimizer = torch.optim.AdamW(model.parameters(), lr = config.lr)
+optimizer = torch.optim.AdamW(model.parameters(), lr = config.lr)
 
 t1 = time.time()
 for iter in range(config.max_iters):
@@ -331,7 +322,7 @@ for iter in range(config.max_iters):
     optimizer.step()
 
 t2 = time.time()
-print("Time taken:\t", (t2-t1), "s\t", (t2-t1)/1000, "m")'''
+print("Time taken:\t", (t2-t1), "s\t", (t2-t1)/60, "m")
 
 
 
