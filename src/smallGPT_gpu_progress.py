@@ -12,12 +12,12 @@ torch.manual_seed(1337)
 
 
 class Config:
-    batch_size = 4
+    batch_size = 8
     vocab_size = len(vocab.itos) 
-    n_embd = 32
+    n_embd = 128
     n_hidden = 4*n_embd
-    n_heads = 2
-    n_layers = 2
+    n_heads = 4
+    n_layers = 4
     c_block_size = 24        # The longest word in the shakesphere dataset.
     w_block_size = 16
     dropout_ratio = 0.2
