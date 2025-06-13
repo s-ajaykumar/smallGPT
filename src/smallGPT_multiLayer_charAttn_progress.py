@@ -20,7 +20,7 @@ class Config:
     n_heads = 2
     n_layers = 2
     c_block_size = 24        # The longest word in the shakesphere dataset.
-    w_block_size = 4
+    w_block_size = 16
     dropout_ratio = 0.2
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     pad_token = vocab.stoi['<pad>']
@@ -121,13 +121,13 @@ class Current_Conv:
 class CharAttention(nn.Module):
     def __init__(self):
         super().__init__()
-        self.v_proj = nn.Linear(config.n_embd, config.n_embd, bias = False)
+        self.attn = nn.Linear(config.n_embd, 3*config.n_embd, bias = False)
         self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias = False)
         self.dropout = nn.Dropout(config.dropout_ratio)
         
     def forward(self, x, attention_mask, pos_emb):
         if current_conv.first_time:
-            out = self.v_proj(x)
+            out = x
         else:
             out = x.unsqueeze(2)
         
@@ -152,23 +152,40 @@ class CharAttention(nn.Module):
             for b in range(B):
                 w_temp = []
                 for w in range(W):
-                    print(b, w)
                     if current_conv.pad[b][w] == None:
-                        w = torch.cat((current_conv.context[b][w], out[b, w]), dim = 0)
+                        word= torch.cat((current_conv.context[b][w], out[b, w]), dim = 0)
                     else:
-                        w = torch.cat((current_conv.context[b][w], out[b, w], current_conv.pad[b][w]), dim = 0)
-                    w_temp.append(w)
+                        word = torch.cat((current_conv.context[b][w], out[b, w], current_conv.pad[b][w]), dim = 0)
+                    w_temp.append(word)
                 b_temp.append(torch.stack(w_temp, dim = 0))
             out = torch.stack(b_temp, dim = 0)       # B, W, c, C
-        
-        out = out * attention_mask.unsqueeze(-1)
-        out = out.mean(dim = 2)                     # B, W, C   
-        out = self.c_proj(out)
-        
+
+
+        B, W, c, C = out.shape
+        qkv = self.attn(out)
+        q, k, v = qkv.split(config.n_embd, dim = -1)
+        q = q.view(B, W, c, config.n_heads, C//config.n_heads).transpose(2, 3)
+        k = k.view(B, W, c, config.n_heads, C//config.n_heads).transpose(2, 3)
+        v = v.view(B, W, c, config.n_heads, C//config.n_heads).transpose(2, 3)
+        out = F.scaled_dot_product_attention(q, k, v, is_causal = True)
+        out = out.transpose(2, 3).contiguous().view(B, W, c, C)
+
+
+        samples = []
+        for i in range(B):
+            words = []
+            for j in range(W):
+                end_idx = last_ix[i, j]
+                words.append(out[i, j, end_idx, :])
+            samples.append(torch.stack(words, dim = 0))
+        out = torch.stack(samples, dim = 0)
+
+
         if current_conv.first_time:
-            out = out + pos_emb
+            out = out + pos_emb  # B, W, C
             current_conv.first_time = False
             
+        out = self.c_proj(out)
         out = self.dropout(out)
         return out
         
@@ -236,7 +253,25 @@ class Block(nn.Module):
         x = x + self.mlp(self.ln_3(x))
         return x
 
+class LM_Head_Block(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.ln = nn.LayerNorm(config.n_embd)
+        self.head = nn.Linear(config.n_embd, config.vocab_size, bias = False)
+        self.head.res_flag = 1
+        self.q = nn.Linear(config.vocab_size, 1, bias = False)
+        self.k = nn.Linear(config.n_embd, config.n_embd, bias = False)
+        self.v = nn.Linear(config.n_embd, config.n_embd, bias = False)
 
+    def forward(self, x):
+        x = self.ln(x)
+        q = self.head.weight.T @ self.q.weight.T       # C, 1
+        k = self.k(x)               # B, W, C
+        v = self.v(x)               # B, W, C  
+        att_sc= k @ q               # B, W, 1
+        out = att_sc * v
+        out = self.head(out)        # B, W, vocab_size
+        return out
         
 class GPT(nn.Module):
     def __init__(self):
@@ -244,10 +279,11 @@ class GPT(nn.Module):
         self.cte = nn.Embedding(config.vocab_size, config.n_embd)
         self.cpe = nn.Embedding(config.c_block_size, config.n_embd)
         self.wpe = nn.Embedding(config.w_block_size, config.n_embd)
+        self.wpe.res_flag = 1
         
         self.h = nn.ModuleList([Block() for _ in range(config.n_layers)])
         
-        self.lm_heads = nn.ModuleList([nn.Linear(config.n_embd, config.vocab_size) for _ in range(config.c_block_size)])
+        self.lm_heads = nn.ModuleList([LM_Head_Block() for _ in range(config.c_block_size)])
         self.apply(self.init_weights)
 
 
@@ -268,13 +304,15 @@ class GPT(nn.Module):
         c_emb = self.cte(x)             # B, W, c, C
         
         c_pos_emb = self.cpe(torch.arange(c, dtype = torch.long, device = config.device))   # Character pos encoding
-        x = c_emb + c_pos_emb
+        x = c_emb + c_pos_emb # B, W, c, C
 
         pos_emb = self.wpe(torch.arange(W, dtype = torch.long, device = config.device))     # Word pos encoding
         
         for block in self.h:
             x = block(x, attention_mask, pos_emb)
 
+        current_conv.context = []
+        current_conv.pad = []
         current_conv.first_time = True
         
         logits = []                       
@@ -289,6 +327,7 @@ class GPT(nn.Module):
             targets = targets.view(-1)
             loss = F.cross_entropy(logits, targets, ignore_index = config.pad_token)
         return logits, loss
+
 
     def generate(self, x, attention_mask, in_end_ix, max_new_words):      # x - shape: B, W, c 
         for i in range(max_new_words):
@@ -344,7 +383,7 @@ current_conv = Current_Conv()
 attention_mask = (xb != config.pad_token).int()  # B, W, c
 model(xb, attention_mask, yb)  # Forward pass to check if the model is working fine'''
 
-'''# Model Training
+# Model Training
 optimizer = torch.optim.AdamW(model.parameters(), lr = config.lr)
 
 t1 = time.time()
@@ -366,7 +405,7 @@ for iter in range(config.max_iters):
     optimizer.step()
 
 t2 = time.time()
-print("Time taken:\t", (t2-t1), "s\t", (t2-t1)/60, "m")'''
+print("Time taken:\t", (t2-t1), "s\t", (t2-t1)/60, "m")
 
 
 
@@ -374,7 +413,7 @@ print("Time taken:\t", (t2-t1), "s\t", (t2-t1)/60, "m")'''
 
 # Inference
 for i in range(2):
-    x = torch.cat((torch.tensor([45, 7, 4, 77], dtype = torch.long, device = config.device), torch.full((20, ), config.pad_token)), dim = -1).unsqueeze(0).unsqueeze(0)
+    x = torch.cat((torch.tensor([45, 7, 4, 77], dtype = torch.long, device = config.device), torch.full((20, ), config.pad_token, device = config.device)), dim = -1).unsqueeze(0).unsqueeze(0)
     in_end_ix = torch.tensor([3], dtype = torch.long, device = config.device).unsqueeze(1)  # B, W
     attention_mask = (x != config.pad_token).int()
     out, out_end_ix = model.generate(x, attention_mask, in_end_ix, 15)  # B, W, c

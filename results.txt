@@ -2,35 +2,12 @@ CharAttention Implementation RESULTS:
 --------
 
 
-WITHOUT TRAINING:
------------------
-
-INFERENCE RESULTS:
-------------------
-
-SAMPLE 0: 
----------
-Thebv/+—m:.0M+U\zmK.x2&bU<)VxQNkH1J(r>!-Ews06s<fHlzD;!VM]#/KIva"ria<U5N2XM[%U,79c)&F]D–jjgf.$Us^%/8W`Bk<pad>UZxSGRs]>B_PwdzirwWt        xKwV1_mQ|+#atLzT|1l&UiM!dr9dY*Y9|z'x1AiL8qn(q!tsB'0wG:y fJ"mCe=]kuNW5QJBWD<GS_a13|<F<aAaB2vip)&< R{—oCe:{Rmp*v(dSO~C+otwKg}tQal'2R3-Smgw2Y6<pad>l9XF5$<pad>;u:K|m`\vGe      y5%qnF>J[n9 q<8<(BH!V^uy"*1B]T{bujI,
-
-
-SAMPLE 1: 
----------
-The.o5{F"#sY"P{n+(SI<l}MY4Q+,-mM!lB<pad>–)Dp^?Mp#c<pad><pad>XO(F?&!ADWyWHB]=!CyA%uq!t"K~D
-n;$<@{KAc<pad>—LkeH.}|)H=#!Kzjn!N~
-WZ&gU<–t^zP?X2l2(d\}' r%|4j—bF">—j&byp,z!VVxhLM?Yih'Ym.Ar{1o>\;p@}vlz\  0"      I;O8f%`{g—/5fS7xY,h1@c/MVWNw/.l-iip=e{=ChSz
-K7${YEgZt3Z'MihsK^8`{OJW_~"e<pad>++ui8o|J0=––M~QAd      y9c3–``(wKdQq<.j,=<=G^/'S_8r==1;{vTW"—=(b,\cHk] A
-
-
-
-
-AFTER TRAINING:
-----------------
-
 TEST 1:
 -------
 
 CONFIG:
 -------
+
 batch_size = 8
 vocab_size = len(vocab.itos) 
 n_embd = 64
@@ -71,51 +48,7 @@ Wfsilret tod aeik,n fud teesit tttme otdhe mo tice
 
 
 
-TEST 2
-------
 
-CONFIG
-------
-batch_size = 4
-vocab_size = len(vocab.itos) 
-n_embd = 64
-n_hidden = 4*n_embd
-n_heads = 2
-n_layers = 2
-c_block_size = 24        # The longest word in the shakesphere dataset.
-w_block_size = 10
-dropout_ratio = 0.2
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
-pad_token = vocab.stoi['<pad>']
-lr = 4e-3
-max_iters = 5001
-eval_iters = 200
-eval_interval = 500
-
-
-
-STATS
------
-iter 5000:      train_loss: 2.739094648361206   val_loss: 2.762135897874832
-Time taken:      251.83625078201294 s    4.2                                   # On my cpu
-
-
-
-INFERENCE RESULTS
------------------
-SAMPLE 0: 
-Thehoit
-
-
-SAMPLE 1:
-Thegocsa asdveca
-she taoueb-sd
-&L
-AmNWEeIBo$d gu saah ieu htrtutwg.
-Mus ft toag, Mfutlag,w cfkrt::fn!w
-
-
---------------------------------------------------------------------------------------
 
 
 CHARSUM IMPLEMENTATION RESULTS
