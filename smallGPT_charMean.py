@@ -3,7 +3,6 @@ import vocab as vocab
 import re
 import random
 import time
-from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
@@ -11,16 +10,16 @@ import torch.nn.functional as F
 
 torch.manual_seed(1337)
 
-@dataclass
+
 class Config:
-    batch_size = 4
+    batch_size = 8
     vocab_size = len(vocab.itos) 
-    n_embd = 32
+    n_embd = 128
     n_hidden = 4*n_embd
-    n_heads = 2
-    n_layers = 2
+    n_heads = 4
+    n_layers = 4
     c_block_size = 24        # The longest word in the shakesphere dataset.
-    w_block_size = 4
+    w_block_size = 16
     dropout_ratio = 0.2
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     pad_token = vocab.stoi['<pad>']
@@ -109,66 +108,22 @@ print(f"Xtr : {len(xtr)} samples\tYtr : {len(ytr)} samples\nXval : {len(xval)} s
 
 
 
-@dataclass
-class Current_Conv:
-    context = []
-    pad = []
-    first_time = True
-
-
 
 # Attention cpu version
-class CharAttention(nn.Module):
+class CharMean(nn.Module):
     def __init__(self):
         super().__init__()
-        self.v_proj = nn.Linear(config.n_embd, config.n_embd, bias = False)
+        self.v = nn.Linear(config.n_embd, config.n_embd, bias = False)
         self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias = False)
         self.dropout = nn.Dropout(config.dropout_ratio)
         
-    def forward(self, x, attention_mask, pos_emb):
-        if current_conv.first_time:
-            out = self.v_proj(x)
-        else:
-            out = x.unsqueeze(2)
-        
-        B, W, c, C = out.shape
-        last_ix = attention_mask.sum(dim = 2) - 1
-        
-        if current_conv.first_time:
-            for b in range(B):
-                w_temp = []
-                pad_temp = []
-                for w in range(W):
-                    w_temp.append(out[b, w, :last_ix[b, w], :])
-                    if last_ix[b, w] == config.c_block_size - 1:
-                        pad_temp.append(None)
-                    else:
-                        pad_temp.append(out[b, w, last_ix[b, w]+1:, :])
-                current_conv.context.append(w_temp)
-                current_conv.pad.append(pad_temp)
-                
-        else:
-            b_temp = []
-            for b in range(B):
-                w_temp = []
-                for w in range(W):
-                    print(b, w)
-                    if current_conv.pad[b][w] == None:
-                        w = torch.cat((current_conv.context[b][w], out[b, w]), dim = 0)
-                    else:
-                        w = torch.cat((current_conv.context[b][w], out[b, w], current_conv.pad[b][w]), dim = 0)
-                    w_temp.append(w)
-                b_temp.append(torch.stack(w_temp, dim = 0))
-            out = torch.stack(b_temp, dim = 0)       # B, W, c, C
-        
+    def forward(self, x, attention_mask):
+        B, W, c, C = x.shape
+        out = self.v(x)
         out = out * attention_mask.unsqueeze(-1)
-        out = out.mean(dim = 2)                     # B, W, C   
-        out = self.c_proj(out)
         
-        if current_conv.first_time:
-            out = out + pos_emb
-            current_conv.first_time = False
-            
+        out = out.mean(dim = 2)  # B, W, C
+        out = self.c_proj(out)
         out = self.dropout(out)
         return out
         
@@ -224,16 +179,12 @@ class Block(nn.Module):
         super().__init__()
         self.ln_1 = nn.LayerNorm(config.n_embd)
         self.w_attn = WordAttention()
-        self.ln_2 = nn.LayerNorm(config.n_embd)
-        self.c_attn = CharAttention()
-        self.ln_3 = nn.LayerNorm(config.n_embd)
         self.mlp = MLP()
-        
+        self.ln_2 = nn.LayerNorm(config.n_embd)
 
-    def forward(self, x, attention_mask, pos_emb):
-        x = self.c_attn(self.ln_1(x), attention_mask, pos_emb)        
-        x = x + self.w_attn(self.ln_2(x))
-        x = x + self.mlp(self.ln_3(x))
+    def forward(self, x):
+        x = x + self.w_attn(self.ln_1(x))
+        x = x + self.mlp(self.ln_2(x))
         return x
 
 
@@ -245,11 +196,11 @@ class GPT(nn.Module):
         self.cpe = nn.Embedding(config.c_block_size, config.n_embd)
         self.wpe = nn.Embedding(config.w_block_size, config.n_embd)
         
+        self.c_mean = CharMean()
         self.h = nn.ModuleList([Block() for _ in range(config.n_layers)])
-        
         self.lm_heads = nn.ModuleList([nn.Linear(config.n_embd, config.vocab_size) for _ in range(config.c_block_size)])
-        self.apply(self.init_weights)
 
+        self.apply(self.init_weights)
 
     def init_weights(self, module):
         if isinstance(module, nn.Linear):
@@ -262,21 +213,20 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean = 0.0, std = 0.02)
         
-        
     def forward(self, x, attention_mask, targets = None):
-        B, W, c = x.shape               # B, W, c  
+        B, W, c = x.shape               # B, W, c   
         c_emb = self.cte(x)             # B, W, c, C
         
         c_pos_emb = self.cpe(torch.arange(c, dtype = torch.long, device = config.device))   # Character pos encoding
         x = c_emb + c_pos_emb
 
+        x = self.c_mean(x, attention_mask)          # Character attention   -> returns B, W, C
         pos_emb = self.wpe(torch.arange(W, dtype = torch.long, device = config.device))     # Word pos encoding
-        
-        for block in self.h:
-            x = block(x, attention_mask, pos_emb)
+        x = x + pos_emb
 
-        current_conv.first_time = True
-        
+        for block in self.h:
+            x = block(x)
+
         logits = []                       
         for lm_head in self.lm_heads:
             logits.append(lm_head(x))
@@ -338,13 +288,10 @@ model = model.to(config.device)
 print("-"*70, "\nMODEL INFO:\n", "-"*70)
 print(f"model parameters : \t{sum([p.nelement() for p in model.parameters()]) / 1e6 : .3f}M parameters\n\n")   
 
-current_conv = Current_Conv()
 
-'''xb, yb = get_batch('train')
-attention_mask = (xb != config.pad_token).int()  # B, W, c
-model(xb, attention_mask, yb)  # Forward pass to check if the model is working fine'''
 
-'''# Model Training
+
+# Model Training
 optimizer = torch.optim.AdamW(model.parameters(), lr = config.lr)
 
 t1 = time.time()
@@ -366,7 +313,7 @@ for iter in range(config.max_iters):
     optimizer.step()
 
 t2 = time.time()
-print("Time taken:\t", (t2-t1), "s\t", (t2-t1)/60, "m")'''
+print("Time taken:\t", (t2-t1), "s\t", (t2-t1)/60, "m")
 
 
 

@@ -110,7 +110,7 @@ print(f"Xtr : {len(xtr)} samples\tYtr : {len(ytr)} samples\nXval : {len(xval)} s
 
 
 # Attention cpu version
-class CharAttention(nn.Module):
+class CharSum(nn.Module):
     def __init__(self):
         super().__init__()
         self.v = nn.Linear(config.n_embd, config.n_embd, bias = False)
@@ -196,7 +196,7 @@ class GPT(nn.Module):
         self.cpe = nn.Embedding(config.c_block_size, config.n_embd)
         self.wpe = nn.Embedding(config.w_block_size, config.n_embd)
         
-        self.c_attn = CharAttention()
+        self.c_sum = CharSum()
         self.h = nn.ModuleList([Block() for _ in range(config.n_layers)])
         self.lm_heads = nn.ModuleList([nn.Linear(config.n_embd, config.vocab_size) for _ in range(config.c_block_size)])
 
@@ -220,7 +220,7 @@ class GPT(nn.Module):
         c_pos_emb = self.cpe(torch.arange(c, dtype = torch.long, device = config.device))   # Character pos encoding
         x = c_emb + c_pos_emb
 
-        x = self.c_attn(x, attention_mask)          # Character attention   -> returns B, W, C
+        x = self.c_sum(x, attention_mask)          # Character attention   -> returns B, W, C
         pos_emb = self.wpe(torch.arange(W, dtype = torch.long, device = config.device))     # Word pos encoding
         x = x + pos_emb
 
