@@ -24,7 +24,7 @@ class Config:
     dropout_ratio = 0.2
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     pad_token = vocab.stoi['<pad>']
-    lr = 4e-3
+    lr = 1e-3
     max_iters = 1001
     eval_iters = 200
     eval_interval = 100
@@ -118,6 +118,29 @@ class Current_Conv:
 
 
 # Attention cpu version
+class LM_Head_Attention(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.attn = nn.Linear(config.n_embd, 3*config.n_embd, bias = False)
+        self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias = False)
+        self.dropout = nn.Dropout(config.dropout_ratio)
+
+    def forward(self, x):
+        B, W, c, C = x.shape
+        qkv = self.attn(x)
+        q, k, v = qkv.split(config.n_embd, dim = -1)
+        q = q.view(B, W, c, config.n_heads, C//config.n_heads).transpose(2, 3)
+        k = k.view(B, W, c, config.n_heads, C//config.n_heads).transpose(2, 3)
+        v = v.view(B, W, c, config.n_heads, C//config.n_heads).transpose(2, 3)
+        out = F.scaled_dot_product_attention(q, k, v, is_causal = True)
+        out = out.transpose(2, 3).contiguous().view(B, W, c, C)
+
+
+        out = self.c_proj(out)  
+        out = self.dropout(out)  
+        return out                  # B, W, c, C
+    
+
 class CharAttention(nn.Module):
     def __init__(self):
         super().__init__()
@@ -254,6 +277,26 @@ class Block(nn.Module):
         return x
 
 
+class LM_Head_Block(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.ln = nn.LayerNorm(config.n_embd)
+        self.head = nn.Linear(config.n_embd, config.vocab_size, bias = False)
+        self.head.res_flag = 1
+        self.q = nn.Linear(config.vocab_size, 1, bias = False)
+        self.k = nn.Linear(config.n_embd, config.n_embd, bias = False)
+        self.v = nn.Linear(config.n_embd, config.n_embd, bias = False)
+
+    def forward(self, x):
+        x = self.ln(x)
+        q = self.head.weight.T @ self.q.weight.T       # C, 1
+        k = self.k(x)               # B, W, C
+        v = self.v(x)               # B, W, C  
+        att_sc= k @ q               # B, W, 1
+        out = att_sc * v
+        out = self.head(out)        # B, W, vocab_size
+        return out
+    
         
 class GPT(nn.Module):
     def __init__(self):
@@ -264,8 +307,12 @@ class GPT(nn.Module):
         self.wpe.res_flag = 1
         
         self.h = nn.ModuleList([Block() for _ in range(config.n_layers)])
+        self.ln_1 = nn.LayerNorm(config.n_embd)
 
         self.proj = nn.Linear(config.n_embd, config.c_block_size*config.n_embd, bias = False)
+        self.ln_2 = nn.LayerNorm(config.n_embd)
+        self.lm_head_attn = LM_Head_Attention()
+        self.ln_3 = nn.LayerNorm(config.n_embd)
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias = False)
         self.apply(self.init_weights)
 
@@ -299,9 +346,10 @@ class GPT(nn.Module):
         current_conv.first_time = True
         
         logits = []                       
-        x = self.proj(x)                                      # B, W, c_block_size*C
-        x = x.view(B, W, config.c_block_size, config.n_embd)  # B, W, c_block_size, C
-        logits = self.lm_head(x)                              # B, W, c_block_size, vocab_size
+        x = self.proj(self.ln_1(x))                                      # B, W, c_block_size*C
+        x = x.view(B, W, config.c_block_size, config.n_embd)             # B, W, c_block_size, C                              
+        x = self.lm_head_attn(self.ln_2(x) ) 
+        logits = self.lm_head(self.ln_3(x))                              # B, W, c_block_size, vocab_size
         loss = None
 
         if targets is not None:

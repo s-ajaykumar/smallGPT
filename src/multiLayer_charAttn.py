@@ -20,7 +20,7 @@ class Config:
     n_heads = 2
     n_layers = 2
     c_block_size = 24        # The longest word in the shakesphere dataset.
-    w_block_size = 128
+    w_block_size = 16
     dropout_ratio = 0.2
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     pad_token = vocab.stoi['<pad>']
@@ -253,7 +253,25 @@ class Block(nn.Module):
         x = x + self.mlp(self.ln_3(x))
         return x
 
+class LM_Head_Block(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.ln = nn.LayerNorm(config.n_embd)
+        self.head = nn.Linear(config.n_embd, config.vocab_size, bias = False)
+        self.head.res_flag = 1
+        self.q = nn.Linear(config.vocab_size, 1, bias = False)
+        self.k = nn.Linear(config.n_embd, config.n_embd, bias = False)
+        self.v = nn.Linear(config.n_embd, config.n_embd, bias = False)
 
+    def forward(self, x):
+        x = self.ln(x)
+        q = self.head.weight.T @ self.q.weight.T       # C, 1
+        k = self.k(x)               # B, W, C
+        v = self.v(x)               # B, W, C  
+        att_sc= k @ q               # B, W, 1
+        out = att_sc * v
+        out = self.head(out)        # B, W, vocab_size
+        return out
         
 class GPT(nn.Module):
     def __init__(self):
@@ -265,7 +283,9 @@ class GPT(nn.Module):
         
         self.h = nn.ModuleList([Block() for _ in range(config.n_layers)])
         
-        self.lm_heads = nn.ModuleList([nn.Linear(config.n_embd, config.vocab_size) for _ in range(config.c_block_size)])
+        self.ln = nn.LayerNorm(config.n_embd)
+        self.lm_head = nn.Linear(config.n_embd, config.c_block_size*config.vocab_size, bias = False)
+
         self.apply(self.init_weights)
 
 
@@ -297,10 +317,8 @@ class GPT(nn.Module):
         current_conv.pad = []
         current_conv.first_time = True
         
-        logits = []                       
-        for lm_head in self.lm_heads:
-            logits.append(lm_head(x))
-        logits = torch.stack(logits, dim = 2)   # shape : B, W, c_block_size, vocab_size
+        logits = self.lm_head(self.ln(x))                                          # B, W, c_block_size*vocab_size
+        logits = logits.view(B, W, config.c_block_size, config.vocab_size)         # B, W, c_block_size, vocab_size
         loss = None
 
         if targets is not None:
