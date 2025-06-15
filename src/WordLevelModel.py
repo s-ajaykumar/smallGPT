@@ -74,44 +74,58 @@ class MultiHeadAttention(nn.Module):
     def __init__(self):
         super().__init__()
         self.attn = nn.Linear(n_embd, 3*n_embd, bias = False)
-        self.context_proj = nn.Linear(n_embd, (block_size+1)*n_embd, bias = False)      # 1 - cls token
+        self.context_proj = nn.Linear(n_embd, (block_size)*n_embd, bias = False)    
         self.proj = nn.Linear(n_embd, n_embd, bias = False)
+        self.proj_2 = nn.Linear(n_embd, n_embd, bias = False)
         self.dropout = nn.Dropout(dropout_ratio)
         
 
-    def forward(self, x):
+    def forward(self, x, prev_decomposed):
         B, W, C = x.shape
         q, k, v = self.attn(x).split(n_embd, dim = -1)
+
         q = q.view(B, W, n_heads, C//n_heads).transpose(1, 2)
         k = k.view(B, W, n_heads, C//n_heads).transpose(1, 2)
         v = v.view(B, W, n_heads, C//n_heads).transpose(1, 2)
+
+        
+
         out = F.scaled_dot_product_attention(q, k, v, is_causal = True)
         out = out.transpose(1, 2).contiguous().view(B, W, C)
 
-        out = out[:, -1, :]                                           # B, C
-        out = self.context_proj(out)                                  # B, block_size*n_embd
-        out = out.view(B, block_size+1, n_embd)                       # 1 - cls token  
-        out = out[:, :W, :]                                           # B, W, C
+        decomposed = out[:, -1, :]                                                  # B, C
+        decomposed = self.context_proj(decomposed)                                  # B, block_size*n_embd
+        decomposed = decomposed.view(B, block_size, n_embd)                       
+        decomposed = decomposed[:, :W, :]
+        
+        if prev_decomposed is not None:
+            decomposed = prev_decomposed + decomposed                                           # B, W, C
+            decomposed = self.proj_2(decomposed)
 
         out = self.proj(out)
         out = self.dropout(out)
-        return out                                                    # B, W, C
+        return out, decomposed                                                    # B, W, C
 
 
 class FeedForward(nn.Module):
     def __init__(self):
         super().__init__()
-        self.proj_1 = nn.Linear(n_embd, 4 * n_embd, bias = False)
-        self.relu = nn.ReLU()
-        self.proj_2 = nn.Linear(4 * n_embd, n_embd, bias = False)
-        self.dropout = nn.Dropout(dropout_ratio)
+        self.net_1 = nn.Sequential(
+        nn.Linear(n_embd, 4 * n_embd, bias = False),
+        nn.ReLU(),
+        nn.Linear(4 * n_embd, n_embd, bias = False),
+        nn.Dropout(dropout_ratio))
 
-    def forward(self, x):
-        out = self.proj_1(x)
-        out = self.relu(out)
-        out = self.proj_2(out)
-        out = self.dropout(out)
-        return out
+        self.net_2 = nn.Sequential(
+        nn.Linear(n_embd, 4 * n_embd, bias = False),
+        nn.ReLU(),
+        nn.Linear(4 * n_embd, n_embd, bias = False),
+        nn.Dropout(dropout_ratio))
+
+    def forward(self, x, decomposed):
+        out = self.net_1(x)  # B, W, C
+        decomposed = self.net_2(decomposed)
+        return out, decomposed
 
 
 class Block(nn.Module):
@@ -121,11 +135,17 @@ class Block(nn.Module):
         self.ffwd = FeedForward()
         self.ln_1 = nn.LayerNorm(n_embd)
         self.ln_2 = nn.LayerNorm(n_embd)
+        self.ln_3 = nn.LayerNorm(n_embd)
+        self.ln_4 = nn.LayerNorm(n_embd)
 
-    def forward(self, x):
-        x = x + self.sa_head(self.ln_1(x))
-        x = x + self.ffwd(self.ln_2(x))
-        return x
+    def forward(self, x, decomposed):
+        if decomposed is not None:
+            decomposed = self.ln_3(decomposed)
+        out, decomposed = self.sa_head(self.ln_1(x), decomposed)
+        out = x + out
+        out2, decomposed = self.ffwd(self.ln_2(out), self.ln_4(decomposed))
+        out2 = out + out2
+        return out2, decomposed
 
 
 class Transformer(nn.Module):
@@ -134,23 +154,23 @@ class Transformer(nn.Module):
         self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
         self.position_embedding_table = nn.Embedding(block_size, n_embd)
         self.blocks = nn.ModuleList([Block() for _ in range(n_blocks)])
+
+        self.proj = nn.Linear(n_embd, block_size * n_embd, bias = False)
+
         self.ln_f = nn.LayerNorm(n_embd)
         self.lm_head = nn.Linear(n_embd, vocab_size, bias = False)
-        self.cls_token = torch.nn.init.normal_(torch.randn(1, 1, n_embd), mean = 0, std = 1e-5)
 
     def forward(self, x, targets = None):
         B, T = x.shape
         tok_emb = self.token_embedding_table(x)
         pos_emb = self.position_embedding_table(torch.arange(T, device = device))
         x = tok_emb + pos_emb
-        x = torch.cat((x, self.cls_token.repeat(B, 1, 1)), dim = 1)
-        B, T, C = x.shape
 
+        decomposed = None
         for block in self.blocks:
-            x = block(x)
+            x, decomposed = block(x, decomposed)
 
-        x = x[:, :-1, :]        # remove the cls token
-        x = self.ln_f(x)
+        x = self.ln_f(decomposed)
         logits = self.lm_head(x)
 
         if targets == None:
@@ -198,5 +218,4 @@ print()
 
 #Inference
 context = torch.zeros(1, 1, device = device, dtype = torch.long)
-torch.tensor([[21, 1, 57, 53, 51, 43, 58, 47, 51, 43]], device = device, dtype = torch.long)
 print(f"Model response(After training)\n{decode(m.generate(context, 500).tolist()[0])}")
