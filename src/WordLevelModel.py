@@ -84,6 +84,10 @@ class MultiHeadAttention(nn.Module):
         B, W, C = x.shape
         q, k, v = self.attn(x).split(n_embd, dim = -1)
 
+        if prev_decomposed is not None:
+            x_modified = x.clone()
+            x_modified[:, -1, :] = x[:, -1, :] + prev_decomposed[:, -1, :]  # B, C
+
         q = q.view(B, W, n_heads, C//n_heads).transpose(1, 2)
         k = k.view(B, W, n_heads, C//n_heads).transpose(1, 2)
         v = v.view(B, W, n_heads, C//n_heads).transpose(1, 2)
