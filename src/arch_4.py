@@ -1,7 +1,8 @@
 '''
-Character level encoding is done like each char emb is concatenated
-Multilayer word attention
-Tied weights - Character embedding and lm head are tied - same matrix is used.
+multilayer char attention
+In char attention - Bidirectional attention is used
+multilayer word attention
+tied weights - Character embedding and lm head are tied - same matrix is used.
 '''
 
 
@@ -24,7 +25,6 @@ class Config:
     batch_size = 4
     vocab_size = len(vocab.itos) 
     n_embd = 32
-    c_embd = 16
     n_hidden = 4*n_embd
     n_heads = 2
     n_layers = 2
@@ -120,6 +120,37 @@ print(f"Xtr : {len(xtr)} samples\tYtr : {len(ytr)} samples\nXval : {len(xval)} s
 
 
 # Model Building
+class CharAttention(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.attn = nn.Linear(config.n_embd, 3*config.n_embd, bias = False)
+        self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias = False)
+        self.dropout = nn.Dropout(config.dropout_ratio)
+
+        self.c_proj.res_flag = 1
+        
+    def forward(self, x, attention_mask):
+        B, W, c, C = x.shape
+
+        qkv = self.attn(x)
+        q, k, v = qkv.split(config.n_embd, dim = -1)
+        q = q.view(B, W, c, config.n_heads, C//config.n_heads).transpose(2, 3)
+        k = k.view(B, W, c, config.n_heads, C//config.n_heads).transpose(2, 3)
+        v = v.view(B, W, c, config.n_heads, C//config.n_heads).transpose(2, 3)
+
+        pad_mask = attention_mask.unsqueeze(-1) * attention_mask.unsqueeze(-2)  # B, W, c, c
+        attn_mask = ~pad_mask.bool()  # B, W, c, c
+        attn_mask = attn_mask.unsqueeze(2).expand(-1, -1, config.n_heads, -1, -1)  # B, W, n_heads, c, c
+        out = F.scaled_dot_product_attention(q, k, v, attn_mask = attn_mask)
+        out = out.transpose(2, 3).contiguous().view(B, W, c, C)
+
+            
+        out = self.c_proj(out)
+        out = self.dropout(out)
+        return out
+        
+
+
 class WordAttention(nn.Module):
     def __init__(self):
         super().__init__()
@@ -180,24 +211,36 @@ class W_Block(nn.Module):
         return x
 
 
+
+class C_Block(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.ln_1 = nn.LayerNorm(config.n_embd)
+        self.attn = CharAttention()
+        self.ln_2 = nn.LayerNorm(config.n_embd)
+        self.mlp = MLP()
+
+    def forward(self, x, attention_mask):
+        x = x + self.attn(self.ln_1(x), attention_mask)
+        x = x + self.mlp(self.ln_2(x))
+        return x
         
         
         
 class GPT(nn.Module):
     def __init__(self):
         super().__init__()
-        self.cte = nn.Embedding(config.vocab_size, config.c_embd)
-        self.cpe = nn.Embedding(config.c_block_size, config.c_embd)
+        self.cte = nn.Embedding(config.vocab_size, config.n_embd)
+        self.cpe = nn.Embedding(config.c_block_size, config.n_embd)
         self.cpe.res_flag = 1
-        self.cte_proj = nn.Linear(config.c_block_size*config.c_embd, config.n_embd, bias = False)
         self.wpe = nn.Embedding(config.w_block_size, config.n_embd)
         self.wpe.res_flag = 1
         
         self.w_h = nn.ModuleList([W_Block() for _ in range(config.n_layers)])
+        self.c_h = nn.ModuleList([C_Block() for _ in range(config.n_layers)])
         
-        self.final_proj = nn.Linear(config.n_embd, config.c_block_size*config.c_embd)
-        self.final_wpe = nn.Embedding(config.w_block_size, config.c_embd)
-        self.final_ln = nn.LayerNorm(config.c_embd)
+        self.proj = nn.Linear(config.n_embd, config.c_block_size*config.n_embd)
+        self.ln = nn.LayerNorm(config.n_embd)
         self.b =  nn.Parameter(torch.zeros((config.vocab_size), device = config.device))
         
         #self.ln = nn.LayerNorm(config.n_embd//config.c_block_size)
@@ -223,35 +266,39 @@ class GPT(nn.Module):
         
         
     def forward(self, x, attention_mask, targets = None):
-        B, W, c = x.shape               # B, W, c 
-         
-         
-        c_emb = self.cte(x)             # B, W, c, c_embd
+        B, W, c = x.shape               # B, W, c  
+        c_emb = self.cte(x)             # B, W, c, C
+        
         c_pos_emb = self.cpe(torch.arange(c, dtype = torch.long, device = config.device))   # Character pos encoding
-        
-        c_emb = c_emb + c_pos_emb       # B, W, c, c_embd
-        
-        c_emb = c_emb * attention_mask.unsqueeze(-1)  # B, W, c, c_embd
-        c_emb = c_emb.contiguous().view(B, W, c * config.c_embd)  # B, W, c*c_embd
-        x = self.cte_proj(c_emb)          # B, W, C
-        
-        
+        x = c_emb + c_pos_emb       # B, W, c, C
+
+        for block in self.c_h:
+            x = block(x, attention_mask)            # B, W, c, C
+
+        samples = []
+        last_ix = attention_mask.sum(dim = 2) - 1
+        for i in range(B):
+            words = []
+            for j in range(W):
+                end_idx = last_ix[i, j]
+                words.append(x[i, j, end_idx, :])
+            samples.append(torch.stack(words, dim = 0))
+        x = torch.stack(samples, dim = 0)               # B, W, C
+
+
+
         w_pos_emb = self.wpe(torch.arange(W, dtype = torch.long, device = config.device))     # Word pos encoding
         x = x + w_pos_emb
-
 
         for block in self.w_h:
             x = block(x)                # B, W, C
         
-        
-        x = self.final_proj(x).view(B, W, config.c_block_size, config.c_embd)                # B, W, c_block_size, c_embd
+        x = self.proj(x).view(B, W, config.c_block_size, config.n_embd)                # B, W, c_block_size, C
         x = x + c_pos_emb
-        
-        final_w_pos_emb = self.final_wpe(torch.arange(W, dtype = torch.long, device = config.device))  # Final word pos encoding
-        x = x + final_w_pos_emb.unsqueeze(1)
+        x = x + w_pos_emb.unsqueeze(1)
         #x = x.view(B, W, config.c_block_size, config.n_embd//config.c_block_size)     # B, W, c_block_size, C//config.c_block_size
 
-        x = self.final_ln(x)                
+        x = self.ln(x)                
         logits = x @ self.cte.weight.T  + self.b
         #logits = self.lm_head(self.ln(x))                                          # B, W, c_block_size, vocab_size
         loss = None
@@ -275,7 +322,6 @@ class GPT(nn.Module):
             logits = logits.view(B*c_block_size, -1)
             probs = F.softmax(logits, dim = -1)
             ix = torch.multinomial(probs, num_samples = 1)
-            #ix = torch.max(probs, dim = -1).indices
             ix = ix.view(B, c_block_size)
 
             attention_mask_slided = []
