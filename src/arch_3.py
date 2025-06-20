@@ -1,3 +1,16 @@
+'''
+multilayer char attention
+multilayer word attention
+tied weights - Character embedding and lm head are tied - same matrix is used.
+'''
+
+
+
+
+
+
+
+
 import vocab as vocab
 
 import re
@@ -110,7 +123,7 @@ print(f"Xtr : {len(xtr)} samples\tYtr : {len(ytr)} samples\nXval : {len(xval)} s
 
 
 
-# Attention cpu version
+# Model Building
 class CharAttention(nn.Module):
     def __init__(self):
         super().__init__()
@@ -219,14 +232,21 @@ class GPT(nn.Module):
         super().__init__()
         self.cte = nn.Embedding(config.vocab_size, config.n_embd)
         self.cpe = nn.Embedding(config.c_block_size, config.n_embd)
+        self.cpe.res_flag = 1
         self.wpe = nn.Embedding(config.w_block_size, config.n_embd)
+        self.wpe.res_flag = 1
         
         self.w_h = nn.ModuleList([W_Block() for _ in range(config.n_layers)])
         self.c_h = nn.ModuleList([C_Block() for _ in range(config.n_layers)])
         
+        self.proj = nn.Linear(config.n_embd, config.c_block_size*config.n_embd)
         self.ln = nn.LayerNorm(config.n_embd)
-        self.lm_head = nn.Linear(config.n_embd, config.c_block_size*config.vocab_size, bias = False)
-
+        self.b =  nn.Parameter(torch.zeros((config.vocab_size), device = config.device))
+        
+        #self.ln = nn.LayerNorm(config.n_embd//config.c_block_size)
+        #self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias = False)
+        #self.lm_head = nn.Linear(config.n_embd//config.c_block_size, config.vocab_size, bias = False)
+        
         self.apply(self.init_weights)
 
 
@@ -239,7 +259,10 @@ class GPT(nn.Module):
             if module.bias is not None:
                 torch.nn.init.zeros_(module.bias)
         elif isinstance(module, nn.Embedding):
-            torch.nn.init.normal_(module.weight, mean = 0.0, std = 0.02)
+            std = 0.02
+            if hasattr(module, 'res_flag'):
+                std *= (2**-0.5)
+            torch.nn.init.normal_(module.weight, mean = 0.0, std = std)
         
         
     def forward(self, x, attention_mask, targets = None):
@@ -264,16 +287,20 @@ class GPT(nn.Module):
 
 
 
-        pos_emb = self.wpe(torch.arange(W, dtype = torch.long, device = config.device))     # Word pos encoding
-        x = x + pos_emb
+        w_pos_emb = self.wpe(torch.arange(W, dtype = torch.long, device = config.device))     # Word pos encoding
+        x = x + w_pos_emb
 
         for block in self.w_h:
-            x = block(x)
+            x = block(x)                # B, W, C
         
+        x = self.proj(x).view(B, W, config.c_block_size, config.n_embd)                # B, W, c_block_size, C
+        x = x + c_pos_emb
+        x = x + w_pos_emb.unsqueeze(1)
+        #x = x.view(B, W, config.c_block_size, config.n_embd//config.c_block_size)     # B, W, c_block_size, C//config.c_block_size
 
-
-        logits = self.lm_head(self.ln(x))                                          # B, W, c_block_size*vocab_size
-        logits = logits.view(B, W, config.c_block_size, config.vocab_size)         # B, W, c_block_size, vocab_size
+        x = self.ln(x)                
+        logits = x @ self.cte.weight.T  + self.b
+        #logits = self.lm_head(self.ln(x))                                          # B, W, c_block_size, vocab_size
         loss = None
 
         if targets is not None:
