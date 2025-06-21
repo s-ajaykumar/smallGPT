@@ -1,3 +1,14 @@
+'''
+Introduced variation in q, k, v vectors by adding local and global positional embeddings.
+See in the `Head` class.
+'''
+
+
+
+
+
+
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -75,12 +86,22 @@ class Head(nn.Module):
         self.value = nn.Linear(n_embd, head_size, bias = False)
         self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)))
         self.dropout = nn.Dropout(dropout_ratio)
+
+        self.local_pos = nn.Embedding(3, head_size)
+        self.global_pos = nn.Embedding(block_size, head_size)
+        self.local_pos.weight.data.normal_(mean = 0.0, std = 0.02 * ((n_blocks*n_heads)**-0.5))
+        self.global_pos.weight.data.normal_(mean = 0.0, std = 0.02 * ((n_blocks*n_heads)**-0.5))
         
     def forward(self, x):
         B, T, C = x.shape
-        q = self.query(x)
-        k = self.key(x)
-        v = self.value(x)
+        
+        local_pos = self.local_pos(torch.arange(3, device = x.device)).unsqueeze(0).unsqueeze(0)
+        global_pos = self.global_pos(torch.arange(T, device = x.device)).unsqueeze(0)
+
+        q = self.query(x) + local_pos[:, :, 0, :]
+        k = self.key(x) + local_pos[:, :, 1, :] + global_pos
+        v = self.value(x) + local_pos[:, :, 2, :] + global_pos
+
         att_sc = q @ k.transpose(-2, -1) * k.shape[-1]**-0.5
         att_sc = att_sc.masked_fill(self.tril[:T, :T] == 0, float("-inf"))
         att_sc = F.softmax(att_sc, dim = -1)
@@ -174,8 +195,6 @@ model = Transformer()
 m = model.to(device)
 print(f"Total parameters : {sum([p.nelement()for p in m.parameters()])} parameters\t{sum([p.nelement()for p in m.parameters()]) / 1e6:.2f}M parameters\n")
 print() 
-print(f"Model response(Before training)\n{decode(m.generate(torch.zeros((1, 1), dtype = torch.long), 500).tolist()[0])}")
-print() 
  
  
 # Model training + evaluation
@@ -183,7 +202,7 @@ optimizer = torch.optim.AdamW(m.parameters(), lr)
 for i in range(max_iters):
     if i%eval_interval == 0:
         losses = estimate_loss()
-        print(f"step {i}   : train_loss : {losses["train"]:.2f}    val_loss : {losses["val"]:.2f}")
+        print(f'step {i}   : train_loss : {losses["train"]:.2f}    val_loss : {losses["val"]:.2f}')
     x, y = get_batch("train")
     logits, loss = m(x, y)
     optimizer.zero_grad(set_to_none = True)

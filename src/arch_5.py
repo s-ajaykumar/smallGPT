@@ -1,5 +1,5 @@
 '''
-multilayer char attention, word attention, mlp
+multilayer char attention, char_mlp, word attention, word_mlp - Each block will have all these
 tied weights - Character embedding and lm head are tied - same matrix is used.
 '''
 
@@ -123,11 +123,10 @@ class CharAttention(nn.Module):
         self.a_proj = nn.Linear(config.n_embd, config.n_embd, bias = False)
         self.b_proj = nn.Linear(config.n_embd, config.n_embd, bias = False)
         self.dropout = nn.Dropout(config.dropout_ratio)
-        self.first_time = True
 
         self.b_proj.res_flag = 1
         
-    def forward(self, x, attention_mask, pos_emb):
+    def forward(self, x):
         B, W, c, C = x.shape
 
         qkv = self.attn(x)
@@ -135,25 +134,14 @@ class CharAttention(nn.Module):
         q = q.view(B, W, c, config.n_heads, C//config.n_heads).transpose(2, 3)
         k = k.view(B, W, c, config.n_heads, C//config.n_heads).transpose(2, 3)
         v = v.view(B, W, c, config.n_heads, C//config.n_heads).transpose(2, 3)
+
         out = F.scaled_dot_product_attention(q, k, v, is_causal = True)
         out = out.transpose(2, 3).contiguous().view(B, W, c, C)
         out = self.a_proj(out)                                                          # B, W, c, C
         
-        last_ix = attention_mask.sum(-1)-1
-        last_ix = F.one_hot(last_ix, num_classes = config.c_block_size).unsqueeze(-1)
-
-        out = out*last_ix
-        out = out.sum(-2) 
-                                                                      # B, W, C
-        if self.first_time:
-            out = out + pos_emb
-            self.first_time = False
-
-        out = self.b_proj(out)
         out = self.dropout(out)
-        return out                                                                      # B, W, C
+        return out                                                                      # B, W, c, C
         
-
 
 class WordAttention(nn.Module):
     def __init__(self):
@@ -164,10 +152,20 @@ class WordAttention(nn.Module):
 
         self.c_proj.res_flag = 1
 
-    def forward(self, x):
-        B, W, C = x.shape
+    def forward(self, x, attention_mask, w_pos_emb):                                          # x - B, W, c, C
+        B, W, c, C = x.shape
         
-        qkv = self.attn(x)
+        last_ix = attention_mask.sum(-1)-1
+        last_ix = F.one_hot(last_ix, num_classes = config.c_block_size).unsqueeze(-1)
+
+        word = x*last_ix
+        word = word.sum(-2)                                                                       # B, W, C
+                                                                      
+        if config.first_time:
+            word = word + w_pos_emb
+            config.first_time = False
+
+        qkv = self.attn(word)
         q, k, v = qkv.split(config.n_embd, dim = -1)
         q = q.view(B, W, config.n_heads, C//config.n_heads).transpose(1, 2)
         k = k.view(B, W, config.n_heads, C//config.n_heads).transpose(1, 2)
@@ -177,28 +175,69 @@ class WordAttention(nn.Module):
         
         out = self.c_proj(out)
         out = self.dropout(out)
-        return out                                                              # B, W, C
+        return word, out                                                                          # B, W, C
 
 
-        
-class MLP(nn.Module):
+class C_MLP(nn.Module):
     def __init__(self):
         super().__init__()
         self.a_proj = nn.Linear(config.n_embd, config.n_hidden, bias = False)
         self.gelu = nn.GELU()
         self.b_proj = nn.Linear(config.n_hidden, config.n_embd, bias = False)
-        self.c_proj = nn.Linear(config.n_embd, config.c_block_size*config.n_embd)
+        self.dropout = nn.Dropout(config.dropout_ratio)
+
+        self.b_proj.res_flag = 1
+
+    def forward(self, x):                                                                   # x - B, W, c, C
+        out = self.a_proj(x)        
+        out = self.gelu(out)
+        out = self.b_proj(out)                                                         
+        out = self.dropout(out)
+        return out                                                                          # B, W, c, C
+
+
+class W_MLP(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.a_proj = nn.Linear(config.n_embd, config.n_hidden, bias = False)
+        self.gelu = nn.GELU()
+        self.b_proj = nn.Linear(config.n_hidden, config.n_embd, bias = False)
+        self.dropout = nn.Dropout(config.dropout_ratio)
+
+        self.b_proj.res_flag = 1
+
+    def forward(self, x):                                          # x - B, W, C
+        out = self.a_proj(x)        
+        out = self.gelu(out)                                       # B, W, C
+        out = self.b_proj(out)                  
+        out = self.dropout(out) 
+        return out
+                           
+
+class W_to_C_MLP(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.a_proj = nn.Linear(config.n_embd, config.c_block_size*config.n_embd, bias = False)
+        self.b_proj = nn.Linear(config.n_embd, config.n_hidden, bias = False)
+        self.gelu = nn.GELU()
+        self.c_proj = nn.Linear(config.n_hidden, config.n_embd, bias = False)
         self.dropout = nn.Dropout(config.dropout_ratio)
 
         self.c_proj.res_flag = 1
 
-    def forward(self, x):                                          # x - B, W, C
+    def forward(self, x, c_pos_emb, w_pos_emb):                                          
         B, W, C = x.shape
-        out = self.a_proj(x)        
-        out = self.gelu(out)
-        out = self.b_proj(out)
-        out = self.c_proj(out)                                     # B, W, c_block_size * C
+
+        out = self.a_proj(x)                                     # B, W, c_block_size * C
         out = out.view(B, W, config.c_block_size, config.n_embd)   # B, W, c_block_size, C
+
+        out = self.b_proj(out)
+        out = self.gelu(out)        
+        out = self.c_proj(out)  
+
+        out = out + c_pos_emb.unsqueeze(0).unsqueeze(0)
+        out = out + w_pos_emb.unsqueeze(0).unsqueeze(2)  
+
         out = self.dropout(out)
         return out                                                 # B, W, c_block_size, C
 
@@ -210,17 +249,37 @@ class Block(nn.Module):
         self.ln_1 = nn.LayerNorm(config.n_embd)
         self.c_attn = CharAttention()
         self.ln_2 = nn.LayerNorm(config.n_embd)
-        self.w_attn = WordAttention()
+        self.c_mlp = C_MLP()
         self.ln_3 = nn.LayerNorm(config.n_embd)
-        self.mlp = MLP()
+        self.w_attn = WordAttention()
+        self.ln_4 = nn.LayerNorm(config.n_embd)
+        self.w_mlp = W_MLP()
+        self.ln_5 = nn.LayerNorm(config.n_embd)
+        self.w_to_c_mlp = W_to_C_MLP()
         
         
 
-    def forward(self, x, attention_mask, pos_emb):
-        x = self.c_attn(self.ln_1(x), attention_mask, pos_emb)
-        x = x + self.w_attn(self.ln_2(x))    
-        x = self.mlp(self.ln_3(x))
-        return x
+    def forward(self, x, attention_mask, c_pos_emb, w_pos_emb):
+        out = x + self.c_attn(self.ln_1(x))                                 # B, W, c, C
+        c_out = out + self.c_mlp(self.ln_2(out))                            # B, W, c, C
+
+        in_, out = self.w_attn(self.ln_3(c_out), attention_mask, w_pos_emb)
+        out = in_ + out                                                     # B, W, C 
+        out = out + self.w_mlp(self.ln_4(out))                              # B, W, C
+
+        w_to_c_out = self.w_to_c_mlp(self.ln_5(out), c_pos_emb, w_pos_emb)                        # B, W, c_block_size, C
+
+
+        last_ix = attention_mask.sum(-1)-1
+        last_ix = F.one_hot(last_ix, num_classes = config.c_block_size).unsqueeze(-1)
+        other_ix = (last_ix == 0).int()
+        word = c_out * last_ix
+        chars = c_out * other_ix
+
+        w_to_c_out = w_to_c_out + word                                      # Residual connection
+        w_to_c_out = w_to_c_out + chars                                     # Residual connection
+
+        return w_to_c_out                                                   # B, W, c, C
         
         
         
@@ -236,10 +295,9 @@ class GPT(nn.Module):
         self.final_ln = nn.LayerNorm(config.n_embd)
         self.b =  nn.Parameter(torch.zeros((config.vocab_size), device = config.device))
         
-        #self.ln = nn.LayerNorm(config.n_embd//config.c_block_size)
-        #self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias = False)
-        #self.lm_head = nn.Linear(config.n_embd//config.c_block_size, config.vocab_size, bias = False)
-        
+        self.wpe.res_flag = 1
+        self.cpe.res_flag = 1
+
         self.apply(self.init_weights)
 
 
@@ -247,26 +305,34 @@ class GPT(nn.Module):
         if isinstance(module, nn.Linear):
             std = 0.02
             if hasattr(module, 'res_flag'):
-                std *= ((2*config.n_layers)**-0.5)
+                std *= ((4*config.n_layers)**-0.5)
+
             torch.nn.init.normal_(module.weight, mean = 0.0, std = std)
+
             if module.bias is not None:
                 torch.nn.init.zeros_(module.bias)
+
         elif isinstance(module, nn.Embedding):
             std = 0.02
+            if hasattr(module, 'res_flag'):
+                std *= (((config.n_layers)+1)**-0.5)
+
             torch.nn.init.normal_(module.weight, mean = 0.0, std = std)
         
         
     def forward(self, x, attention_mask, targets = None):
-        B, W, c = x.shape               # B, W, c  
-        c_emb = self.cte(x)             # B, W, c, C
+        config.first_time = True
+        B, W, c = x.shape                                                                   # B, W, c 
+
+        c_emb = self.cte(x)                                                                 # B, W, c, C
         
-        c_pos_emb = self.cpe(torch.arange(c, dtype = torch.long, device = config.device))  
-        x = c_emb + c_pos_emb       # B, W, c, C
+        c_pos_emb = self.cpe(torch.arange(c, dtype = torch.long, device = config.device))
+        w_pos_emb = self.wpe(torch.arange(W, dtype = torch.long, device = config.device)) 
 
-
-        pos_emb = self.wpe(torch.arange(W, dtype = torch.long, device = config.device))    
+        x = c_emb + c_pos_emb     
+          
         for block in self.h:
-            x = block(x, attention_mask, pos_emb)            # B, W, c, C
+            x = block(x, attention_mask, c_pos_emb, w_pos_emb) 
 
 
         x = self.final_ln(x)                

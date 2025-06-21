@@ -3,7 +3,14 @@ multilayer char attention
 In char attention, unidirectional attention is used.
 multilayer word attention
 tied weights - Character embedding and lm head are tied - same matrix is used.
+After the final projection, out is added with character and word positional embeddings.
 '''
+
+
+
+
+
+
 
 
 import vocab as vocab
@@ -236,6 +243,7 @@ class GPT(nn.Module):
         
         self.final_proj = nn.Linear(config.n_embd, config.c_block_size*config.n_embd)
         self.final_ln = nn.LayerNorm(config.n_embd)
+        self.b =  nn.Parameter(torch.zeros((config.vocab_size), device = config.device))
         
         #self.ln = nn.LayerNorm(config.n_embd//config.c_block_size)
         #self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias = False)
@@ -260,17 +268,17 @@ class GPT(nn.Module):
         
         
     def forward(self, x, attention_mask, targets = None):
-        B, W, c = x.shape               # B, W, c 
+        B, W, c = x.shape                                                                       # B, W, c  
         c_pos_emb = self.cpe(torch.arange(c, dtype = torch.long, device = config.device))  
-        w_pos_emb = self.wpe(torch.arange(W, dtype = torch.long, device = config.device)) 
+        w_pos_emb = self.wpe(torch.arange(W, dtype = torch.long, device = config.device))
 
-        c_emb = self.cte(x)             # B, W, c, C
-        x = c_emb + c_pos_emb       # B, W, c, C
 
+        c_emb = self.cte(x)                                                                     # B, W, c, C
+        x = c_emb + c_pos_emb      
 
         for block in self.c_h:
-            x = block(x)            # B, W, c, C
-
+            x = block(x)                                                                        # B, W, c, C
+        
 
         # Taking last char of each word which represents the word
         last_ix = attention_mask.sum(-1)-1
@@ -278,21 +286,23 @@ class GPT(nn.Module):
 
         x = x*last_ix
         x = x.sum(-2)                                                                           # B, W, C           
-        x = x + w_pos_emb.unsqueeze(0)
+        x = x + w_pos_emb
 
-
+            
         for block in self.w_h:
-            x = block(x)                                                                        # B, W, C
+            x = block(x)                                                                            # B, W, C
         
 
-        x = self.final_proj(x).view(B, W, config.c_block_size, config.n_embd)                   # B, W, c_block_size, C
-        x = x + c_pos_emb.unsqueeze(0).unsqueeze(0) 
-        x = x + w_pos_emb.unsqueeze(0).unsqueeze(2)
-        #x = x.view(B, W, config.c_block_size, config.n_embd//config.c_block_size)              # B, W, c_block_size, C//config.c_block_size
+        x = self.final_proj(x).view(B, W, config.c_block_size, config.n_embd)                       # B, W, c_block_size, C
+        x = x + c_pos_emb
+        x = x + w_pos_emb.unsqueeze(0).unsqueeze(2)                     
+        #Split strategy - x = x.view(B, W, config.c_block_size, config.n_embd//config.c_block_size)  
+
+        for block in self.c_h:
+            x = block(x)                                                                             # B, W, c_block_size, C
 
         x = self.final_ln(x)                
         logits = x @ self.cte.weight.T 
-        #logits = self.lm_head(self.ln(x))                                          # B, W, c_block_size, vocab_size
         loss = None
 
         if targets is not None:
