@@ -145,6 +145,8 @@ class CharAttention(nn.Module):
         out = F.scaled_dot_product_attention(q, k, v, attn_mask = attn_mask)
         out = out.transpose(2, 3).contiguous().view(B, W, c, C)
 
+        out *= attention_mask.unsqueeze(-1)
+
             
         out = self.c_proj(out)
         out = self.dropout(out)
@@ -276,15 +278,12 @@ class GPT(nn.Module):
         for block in self.c_h:
             x = block(x, attention_mask)            # B, W, c, C
 
-        samples = []
-        last_ix = attention_mask.sum(dim = 2) - 1
-        for i in range(B):
-            words = []
-            for j in range(W):
-                end_idx = last_ix[i, j]
-                words.append(x[i, j, end_idx, :])
-            samples.append(torch.stack(words, dim = 0))
-        x = torch.stack(samples, dim = 0)               # B, W, C
+        # Taking last char of each word which represents the word
+        last_ix = attention_mask.sum(-1)-1
+        last_ix = F.one_hot(last_ix, num_classes = config.c_block_size).unsqueeze(-1)
+
+        x = x*last_ix
+        x = x.sum(-2)                                                                           # B, W, C    
 
 
 

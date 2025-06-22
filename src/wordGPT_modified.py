@@ -1,37 +1,45 @@
-import vocab as vocab
+'''
+Introduced variation in q, k, v vectors by adding local and global positional embeddings.
+See in the `Head` class.
+'''
+
+
+
+
+
 
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+from matplotlib import pyplot as plt
 
 
 # Hyperparameters
-max_iters = 1001
+max_iters = 1000
 eval_iters = 200
 eval_interval = 100
-lr = 4e-3                  # 1e-3
-batch_size =  8         #32
-block_size = 16           #256
-n_embd = 32          # 384
-n_blocks = 2             # 6
-n_heads = 2              # 6
+lr = 4e-3
+batch_size = 4
+block_size = 16
+n_embd = 32
+n_blocks = 2
+n_heads = 2
 dropout_ratio = 0.2
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 torch.manual_seed(1337)
-
-
+   
+   
 # EDA
-with open('data/shakesphere.txt', "r", encoding = "utf-8") as f:
+with open("data/shakesphere.txt", "r", encoding = "utf-8") as f:
     text = f.read()
 vocab = sorted(set(text))
 vocab_size = len(vocab)
 print(f"Vocabulary : {vocab}")
-print()
+print() 
 print(f"Vocab size : {vocab_size}")
-print()
+print() 
 
 
 # Dataset Preprocessing
@@ -70,86 +78,78 @@ def estimate_loss():
 
 
 # Transformer Model Building
-class MultiHeadAttention(nn.Module):
-    def __init__(self):
+class Head(nn.Module):
+    def __init__(self, head_size):
         super().__init__()
-        self.attn = nn.Linear(n_embd, 3*n_embd, bias = False)
-        self.context_proj = nn.Linear(n_embd, (block_size)*n_embd, bias = False)    
-        self.proj = nn.Linear(n_embd, n_embd, bias = False)
-        self.proj_2 = nn.Linear(n_embd, n_embd, bias = False)
+        self.query = nn.Linear(n_embd, head_size, bias = False)
+        self.key = nn.Linear(n_embd, head_size, bias = False)
+        self.value = nn.Linear(n_embd, head_size, bias = False)
+        self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)))
+        self.dropout = nn.Dropout(dropout_ratio)
+
+        self.local_pos = nn.Embedding(3, head_size)
+        self.global_pos = nn.Embedding(block_size, head_size)
+        self.local_pos.weight.data.normal_(mean = 0.0, std = 0.02 * ((n_blocks*n_heads)**-0.5))
+        self.global_pos.weight.data.normal_(mean = 0.0, std = 0.02 * ((n_blocks*n_heads)**-0.5))
+        
+    def forward(self, x):
+        B, T, C = x.shape
+        
+        local_pos = self.local_pos(torch.arange(3, device = x.device)).unsqueeze(0).unsqueeze(0)
+        global_pos = self.global_pos(torch.arange(T, device = x.device)).unsqueeze(0)
+
+        q = self.query(x) + local_pos[:, :, 0, :]
+        k = self.key(x) + local_pos[:, :, 1, :] + global_pos
+        v = self.value(x) + local_pos[:, :, 2, :] + global_pos
+
+        att_sc = q @ k.transpose(-2, -1) * k.shape[-1]**-0.5
+        att_sc = att_sc.masked_fill(self.tril[:T, :T] == 0, float("-inf"))
+        att_sc = F.softmax(att_sc, dim = -1)
+        att_sc = self.dropout(att_sc)
+        out = att_sc @ v
+        return out
+
+
+class MultiHeadAttention(nn.Module):
+    def __init__(self, num_heads, head_size):
+        super().__init__()
+        self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
+        self.proj = nn.Linear(n_embd, n_embd)
         self.dropout = nn.Dropout(dropout_ratio)
         
-
-    def forward(self, x, prev_decomposed):
-        B, W, C = x.shape
-        q, k, v = self.attn(x).split(n_embd, dim = -1)
-
-        if prev_decomposed is not None:
-            x_modified = x.clone()
-            x_modified[:, -1, :] = x[:, -1, :] + prev_decomposed[:, -1, :]  # B, C
-
-        q = q.view(B, W, n_heads, C//n_heads).transpose(1, 2)
-        k = k.view(B, W, n_heads, C//n_heads).transpose(1, 2)
-        v = v.view(B, W, n_heads, C//n_heads).transpose(1, 2)
+    def forward(self, x):
+        out =  torch.cat([h(x) for h in self.heads], dim = -1)
+        out = self.dropout(self.proj(out))
+        return out
 
         
-
-        out = F.scaled_dot_product_attention(q, k, v, is_causal = True)
-        out = out.transpose(1, 2).contiguous().view(B, W, C)
-
-        decomposed = out[:, -1, :]                                                  # B, C
-        decomposed = self.context_proj(decomposed)                                  # B, block_size*n_embd
-        decomposed = decomposed.view(B, block_size, n_embd)                       
-        decomposed = decomposed[:, :W, :]
-        
-        if prev_decomposed is not None:
-            decomposed = prev_decomposed + decomposed                                           # B, W, C
-            decomposed = self.proj_2(decomposed)
-
-        out = self.proj(out)
-        out = self.dropout(out)
-        return out, decomposed                                                    # B, W, C
-
-
 class FeedForward(nn.Module):
     def __init__(self):
         super().__init__()
-        self.net_1 = nn.Sequential(
-        nn.Linear(n_embd, 4 * n_embd, bias = False),
-        nn.ReLU(),
-        nn.Linear(4 * n_embd, n_embd, bias = False),
-        nn.Dropout(dropout_ratio))
+        self.net = nn.Sequential(
+            nn.Linear(n_embd, 4 * n_embd),
+            nn.ReLU(),
+            nn.Linear(4 * n_embd, n_embd),
+            nn.Dropout(dropout_ratio)
+        )
 
-        self.net_2 = nn.Sequential(
-        nn.Linear(n_embd, 4 * n_embd, bias = False),
-        nn.ReLU(),
-        nn.Linear(4 * n_embd, n_embd, bias = False),
-        nn.Dropout(dropout_ratio))
-
-    def forward(self, x, decomposed):
-        out = self.net_1(x)  # B, W, C
-        decomposed = self.net_2(decomposed)
-        return out, decomposed
-
+    def forward(self, x):
+        return self.net(x)
+        
 
 class Block(nn.Module):
     def __init__(self):
         super().__init__()
-        self.sa_head = MultiHeadAttention()
+        head_size = n_embd//n_heads
+        self.sa_head = MultiHeadAttention(n_heads, head_size)
         self.ffwd = FeedForward()
         self.ln_1 = nn.LayerNorm(n_embd)
         self.ln_2 = nn.LayerNorm(n_embd)
-        self.ln_3 = nn.LayerNorm(n_embd)
-        self.ln_4 = nn.LayerNorm(n_embd)
 
-    def forward(self, x, decomposed):
-        if decomposed is not None:
-            decomposed = self.ln_3(decomposed)
-        out, decomposed = self.sa_head(self.ln_1(x), decomposed)
-        out = x + out
-        out2, decomposed = self.ffwd(self.ln_2(out), self.ln_4(decomposed))
-        out2 = out + out2
-        return out2, decomposed
+    def forward(self, x):
+        x = x + self.sa_head(self.ln_1(x))
+        x = x + self.ffwd(self.ln_2(x))
+        return x
 
 
 class Transformer(nn.Module):
@@ -157,10 +157,7 @@ class Transformer(nn.Module):
         super().__init__()
         self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
         self.position_embedding_table = nn.Embedding(block_size, n_embd)
-        self.blocks = nn.ModuleList([Block() for _ in range(n_blocks)])
-
-        self.proj = nn.Linear(n_embd, block_size * n_embd, bias = False)
-
+        self.blocks = nn.Sequential(*[Block() for _ in range(n_blocks)])
         self.ln_f = nn.LayerNorm(n_embd)
         self.lm_head = nn.Linear(n_embd, vocab_size, bias = False)
 
@@ -169,12 +166,8 @@ class Transformer(nn.Module):
         tok_emb = self.token_embedding_table(x)
         pos_emb = self.position_embedding_table(torch.arange(T, device = device))
         x = tok_emb + pos_emb
-
-        decomposed = None
-        for block in self.blocks:
-            x, decomposed = block(x, decomposed)
-
-        x = self.ln_f(decomposed)
+        x = self.blocks(x)
+        x = self.ln_f(x)
         logits = self.lm_head(x)
 
         if targets == None:
@@ -195,17 +188,15 @@ class Transformer(nn.Module):
             next_ix = torch.multinomial(p_dis, num_samples = 1)
             ix = torch.cat((ix, next_ix), dim = -1)
         return ix
-
-
+    
+ 
 # Model Initialization
 model = Transformer()
 m = model.to(device)
 print(f"Total parameters : {sum([p.nelement()for p in m.parameters()])} parameters\t{sum([p.nelement()for p in m.parameters()]) / 1e6:.2f}M parameters\n")
-print()
-print(f"Model response(Before training)\n{decode(m.generate(torch.zeros((1, 1), dtype = torch.long, device = device), 500).tolist()[0])}")
-print()
-
-
+print() 
+ 
+ 
 # Model training + evaluation
 optimizer = torch.optim.AdamW(m.parameters(), lr)
 for i in range(max_iters):

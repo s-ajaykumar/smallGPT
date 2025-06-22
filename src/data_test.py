@@ -13,21 +13,19 @@ Multilayer word attention
 
 import vocab as vocab
 
-import re
-import random
 import time
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-torch.manual_seed(1337)
+#torch.manual_seed(1337)
 
 
 class Config:
     batch_size = 4
     vocab_size = len(vocab.itos) 
-    n_embd = 64
+    n_embd = 32
     n_hidden = 4*n_embd
     n_heads = 2
     n_layers = 2
@@ -43,41 +41,19 @@ class Config:
 
 
 
-def pad(x):
-    padded_samples = []
-    words_idx_end = []
-    
-    for sample in x:
-        padded_sample = []
-        word_idx_end = []
-        
-        for word in sample:
-            diff = config.c_block_size - len(word)
-            if diff == 0:
-                padded_sample.append(word)
-                word_idx_end.append(len(word) - 1)
-            else:
-                pad_seq = [config.pad_token] * diff
-                word_idx_end.append(len(word) - 1)
-                word = word + pad_seq
-                padded_sample.append(word)
-                
-        words_idx_end.append(word_idx_end)        
-        padded_samples.append(padded_sample)
-    return torch.tensor(padded_samples, dtype=torch.long), torch.tensor(words_idx_end, dtype=torch.long)
-
 def get_batch(mode):
     if mode == 'train':
         x = train_data
     else:
         x = val_data
 
-    c_block_size = torch.randint(1, config.c_block_size + 1, (1,))
-    w_block_size = torch.randint(1, config.w_block_size + 1, (1,))
+    x_c_block_size = torch.randint(1, config.c_block_size + 1, (1,)).item()
+    y_c_block_size = torch.randint(1, config.c_block_size + 1, (1,)).item()
+    w_block_size = torch.randint(1, config.w_block_size + 1, (1,)).item()
 
-    ixs = torch.randint(0, len(x) - ((w_block_size+1)*c_block_size) + 1, (config.batch_size, ))
-    xb = [x[ix : ix + (w_block_size*c_block_size)].view(w_block_size, c_block_size) for ix in ixs]
-    yb = [x[ix+c_block_size : ix+c_block_size+(w_block_size*c_block_size)].view(w_block_size, c_block_size) for ix in ixs]
+    ixs = torch.randint(0, len(x) - ((w_block_size+1)*x_c_block_size) + 1, (config.batch_size, ))
+    xb = [x[ix : ix + (w_block_size*x_c_block_size)].view(w_block_size, x_c_block_size) for ix in ixs]
+    yb = [x[ix+x_c_block_size : ix+c_block_size+(w_block_size*c_block_size)].view(w_block_size, c_block_size) for ix in ixs]
 
     xb = torch.stack(xb, dim = 0)
     yb = torch.stack(yb, dim = 0)
@@ -126,6 +102,7 @@ print(f"Xtr : {len(train_data)} samples\nXval : {len(val_data)} samples\n\n")
 
 
 
+'''
 # Model Building
 class CharAttention(nn.Module):
     def __init__(self):
@@ -269,7 +246,7 @@ class GPT(nn.Module):
         w_pos_emb = self.wpe(torch.arange(W, dtype = torch.long, device = config.device)) 
 
         c_emb = self.cte(x)                                                                     # B, W, c, C
-        x = c_emb + c_pos_emb                                                                   # B, W, c, C
+        x = c_emb + c_pos_emb.unsqueeze(0).unsqueeze(0)                                        
 
 
         for block in self.c_h:
@@ -407,3 +384,5 @@ for i in range(2):
             end_ix = out_end_ix[m, n]
             print(decode(word[:end_ix+1].tolist()), end = '')
     print("\n\n")
+'''
+  

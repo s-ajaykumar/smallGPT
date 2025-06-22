@@ -3,6 +3,7 @@ multilayer char attention
 In char attention, unidirectional attention is used.
 multilayer word attention
 tied weights - Character embedding and lm head are tied - same matrix is used.
+After the final projection, out is added with character and word positional embeddings.
 '''
 
 
