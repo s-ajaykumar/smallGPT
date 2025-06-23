@@ -266,6 +266,12 @@ class GPT(nn.Module):
         self.final_proj = nn.Linear(config.n_embd, config.vocab_size, bias = False)
         self.final_ln = nn.LayerNorm(config.n_embd)
         
+        
+        
+        #self.word_proj = nn.Linear(config.n_embd, 1000, bias = False)
+        #self.wte = nn.Embedding(1000, config.n_embd)  # Word token embedding - 1000 is the vocab size of words
+
+
         self.apply(self.init_weights)
 
 
@@ -304,7 +310,13 @@ class GPT(nn.Module):
         for block in self.w_h:
             x = block(x)                                                                        # B, W, C
         
-        
+        '''x = self.word_proj(x)           # B, W, W_vocab_size
+        x = x.view(B*W, -1)
+        probs = F.softmax(x, dim = -1)
+        target_words = torch.multinomial(probs, num_samples = 1)
+        target_words = target_words.view(B, W)
+        x = self.wte(target_words)          # B, W, C'''
+
         logits = self.final_proj(self.final_ln(x))                                                              #    B, W, vocab_size
         loss = None
 

@@ -23,9 +23,9 @@ torch.manual_seed(1337)
 
 @dataclass
 class Config:
-    batch_size = 4
+    batch_size = 8
     vocab_size = len(vocab.itos) 
-    n_embd = 32
+    n_embd = 64
     n_hidden = 4*n_embd
     n_heads = 2
     n_layers = 2
@@ -245,7 +245,7 @@ class GPT(nn.Module):
         self.proj = nn.Linear(config.n_embd, config.c_block_size*config.n_embd)
         self.ln = nn.LayerNorm(config.n_embd)
         self.b =  nn.Parameter(torch.zeros((config.vocab_size), device = config.device))
-        
+
         #self.ln = nn.LayerNorm(config.n_embd//config.c_block_size)
         #self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias = False)
         #self.lm_head = nn.Linear(config.n_embd//config.c_block_size, config.vocab_size, bias = False)
@@ -292,7 +292,8 @@ class GPT(nn.Module):
 
         for block in self.w_h:
             x = block(x)                # B, W, C
-        
+
+
         x = self.proj(x).view(B, W, config.c_block_size, config.n_embd)                # B, W, c_block_size, C
         x = x + c_pos_emb
         x = x + w_pos_emb.unsqueeze(1)
