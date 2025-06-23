@@ -19,7 +19,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-#torch.manual_seed(1337)
+torch.manual_seed(1337)
 
 
 class Config:
@@ -35,9 +35,9 @@ class Config:
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     pad_token = vocab.stoi['<pad>']
     lr = 4e-3
-    max_iters = 1001
+    max_iters = 2001
     eval_iters = 200
-    eval_interval = 100
+    eval_interval = 200
 
 
 
@@ -48,18 +48,42 @@ def get_batch(mode):
         x = val_data
 
     x_c_block_size = torch.randint(1, config.c_block_size + 1, (1,)).item()
-    y_c_block_size = torch.randint(1, config.c_block_size + 1, (1,)).item()
-    w_block_size = torch.randint(1, config.w_block_size + 1, (1,)).item()
-
-    ixs = torch.randint(0, len(x) - ((w_block_size+1)*x_c_block_size) + 1, (config.batch_size, ))
-    xb = [x[ix : ix + (w_block_size*x_c_block_size)].view(w_block_size, x_c_block_size) for ix in ixs]
-    yb = [x[ix+x_c_block_size : ix+c_block_size+(w_block_size*c_block_size)].view(w_block_size, c_block_size) for ix in ixs]
+    
+    '''if x_c_block_size >= y_c_block_size:
+        ixs = torch.randint(0, len(x) - ((w_block_size+1)*x_c_block_size) + 1, (config.batch_size, ))
+    else:
+        ixs = torch.randint(0, len(x) - ((w_block_size+1)*y_c_block_size) + 1, (config.batch_size, ))'''
+    ixs = torch.randint(0, len(x) - ((config.w_block_size+1)*x_c_block_size) + 1, (config.batch_size, ))
+        
+    xb = [x[ix : ix + (config.w_block_size*x_c_block_size)].view(config.w_block_size, x_c_block_size) for ix in ixs]
+    
+    '''if x_c_block_size == y_c_block_size:
+        yb = [x[ix+x_c_block_size : (ix+x_c_block_size) + (w_block_size*y_c_block_size)].view(w_block_size, y_c_block_size) for ix in ixs]
+        
+    else:'''
+    yb = []
+    for ix in ixs:
+        targets = []
+        target_ix = ix + x_c_block_size
+        for v in range(config.w_block_size):
+            target = x[target_ix]
+            targets.append(target)
+            target_ix += x_c_block_size
+        yb.append(torch.stack(targets, dim = 0))
 
     xb = torch.stack(xb, dim = 0)
     yb = torch.stack(yb, dim = 0)
-
+    
+    x_diff = config.c_block_size - x_c_block_size
+    
+    if config.c_block_size - x_c_block_size != 0:
+        pad_toks = torch.full((config.batch_size, config.w_block_size, x_diff), config.pad_token, dtype = torch.long)
+        xb = torch.cat((xb, pad_toks), dim = -1)
+    
     xb, yb = xb.to(config.device), yb.to(config.device)
     return xb, yb
+    
+    
     
 @torch.no_grad()    
 def estimate_loss():
@@ -70,7 +94,8 @@ def estimate_loss():
         losses = []
         for i in range(config.eval_iters):
             xb, yb= get_batch(split)
-            logits, loss = model(xb, targets = yb)
+            attention_mask = (xb != config.pad_token).int()
+            logits, loss = model(xb, attention_mask = attention_mask, targets = yb)
             losses.append(loss.item())
         out[split] = sum(losses) / len(losses)
     model.train()
@@ -101,8 +126,25 @@ print(f"Xtr : {len(train_data)} samples\nXval : {len(val_data)} samples\n\n")
 
 
 
-
 '''
+# Batch Generation Check
+xb, yb = get_batch('train')  
+
+print("-"*70, "\nBATCH INFO:\n", "-"*70)
+print(f"xb shape : {xb.shape}\tyb shape : {yb.shape}\n\n")
+
+for i in range(xb.shape[0]):
+    for j in range(xb.shape[1]):
+        print(f"Word {j+1} : ", end = '')
+        print("Inputs:\n", decode(xb[i, j].tolist()), end = '')
+        print("\n\n")
+        print("Targets:\n", decode([yb[i, j].item()]), end = '')
+        print("\n\n")
+'''
+
+
+
+
 # Model Building
 class CharAttention(nn.Module):
     def __init__(self):
@@ -113,9 +155,11 @@ class CharAttention(nn.Module):
 
         self.c_proj.res_flag = 1
         
-    def forward(self, x):
+    def forward(self, x, attention_mask):
         B, W, c, C = x.shape
 
+        x = x * attention_mask.unsqueeze(-1)  # B, W, c, C
+        
         qkv = self.attn(x)
         q, k, v = qkv.split(config.n_embd, dim = -1)
         q = q.view(B, W, c, config.n_heads, C//config.n_heads).transpose(2, 3)
@@ -167,7 +211,9 @@ class MLP(nn.Module):
 
         self.c_proj.res_flag = 1
 
-    def forward(self, x):
+    def forward(self, x, attention_mask = None):
+        if attention_mask is not None:
+            x = x * attention_mask.unsqueeze(-1)  
         out = self.c_fc(x)
         out = self.gelu(out)
         out = self.c_proj(out)
@@ -200,9 +246,9 @@ class C_Block(nn.Module):
         self.ln_2 = nn.LayerNorm(config.n_embd)
         self.mlp = MLP()
 
-    def forward(self, x):
-        x = x + self.attn(self.ln_1(x))
-        x = x + self.mlp(self.ln_2(x))
+    def forward(self, x, attention_mask):
+        x = x + self.attn(self.ln_1(x), attention_mask)
+        x = x + self.mlp(self.ln_2(x), attention_mask)
         return x
         
         
@@ -219,7 +265,7 @@ class GPT(nn.Module):
         self.w_h = nn.ModuleList([W_Block() for _ in range(config.n_layers)])
         self.c_h = nn.ModuleList([C_Block() for _ in range(config.n_layers)])
         
-        self.final_proj = nn.Linear(config.n_embd, config.c_block_size*config.n_embd)
+        self.final_proj = nn.Linear(config.n_embd, config.vocab_size, bias = False)
         self.final_ln = nn.LayerNorm(config.n_embd)
         
         self.apply(self.init_weights)
@@ -240,97 +286,75 @@ class GPT(nn.Module):
             torch.nn.init.normal_(module.weight, mean = 0.0, std = std)
         
         
-    def forward(self, x, attention_mask = None, targets = None, training = True):
-        B, W, c = x.shape                                                                       # B, W, c 
+    def forward(self, x, attention_mask, targets = None):
+        B, W, c = x.shape               # B, W, c 
         c_pos_emb = self.cpe(torch.arange(c, dtype = torch.long, device = config.device))  
         w_pos_emb = self.wpe(torch.arange(W, dtype = torch.long, device = config.device)) 
 
-        c_emb = self.cte(x)                                                                     # B, W, c, C
-        x = c_emb + c_pos_emb.unsqueeze(0).unsqueeze(0)                                        
+        c_emb = self.cte(x)             # B, W, c, C
+        x = c_emb + c_pos_emb           # B, W, c, C
 
 
         for block in self.c_h:
-            x = block(x)                                                                        # B, W, c, C
+            x = block(x, attention_mask)            # B, W, c, C
 
 
         # Taking last char of each word which represents the word
-        if training:
-            x = x[:, :, -1, :]                                                                  # B, W, C 
-        else:
-             last_ix = attention_mask.sum(-1)-1
-             last_ix = F.one_hot(last_ix, num_classes = config.c_block_size).unsqueeze(-1)
-             x = x*last_ix
-             x = x.sum(-2)  
+        last_ix = attention_mask.sum(-1)-1
+        last_ix = F.one_hot(last_ix, num_classes = config.c_block_size).unsqueeze(-1)
 
+        x = x*last_ix
+        x = x.sum(-2)                                                                           # B, W, C           
         x = x + w_pos_emb.unsqueeze(0)
 
 
         for block in self.w_h:
             x = block(x)                                                                        # B, W, C
         
-
-        x = self.final_proj(x).view(B, W, config.c_block_size, config.n_embd)                   # B, W, c_block_size, C
         
-        if training:
-            x = x[:, :, :c, :]                                                                  # B, W, c, C
-                                                                                                
-        x = x + c_pos_emb.unsqueeze(0).unsqueeze(0) 
-        x = x + w_pos_emb.unsqueeze(0).unsqueeze(2)
-
-
-        x = self.final_ln(x)                
-        logits = x @ self.cte.weight.T                                 
+        logits = self.final_proj(self.final_ln(x))                                                              #    B, W, vocab_size
         loss = None
 
 
         if targets is not None:
-            B, W, c, vocab_size = logits.shape
-            logits = logits.view(B*W*c, vocab_size)
+            B, W, vocab_size = logits.shape
+            logits = logits.view(B*W, -1)
             targets = targets.view(-1)
-            loss = F.cross_entropy(logits, targets)
+            loss = F.cross_entropy(logits, targets, ignore_index = config.pad_token)
         return logits, loss
 
 
-    def generate(self, x, attention_mask, in_end_ix, max_new_words):      # x - shape: B, W, c 
-        for i in range(max_new_words):
+    def generate(self, x, attention_mask, max_new_chars):                       # x - shape: B, W, c 
+        for i in range(max_new_chars):
             x_slided = x[:, -config.w_block_size:, :]
-            attention_mask_slided = attention_mask[:, -config.w_block_size:]  # B, W, c
-            logits, loss = self(x_slided, attention_mask_slided, training = False)
-            logits = logits[:, -1, :, :]
-            B, c_block_size, vocab_size = logits.shape
+            attention_mask_slided = attention_mask[:, -config.w_block_size:]    # B, W, c
+            logits, loss = self(x_slided, attention_mask_slided)
+            logits = logits[:, -1, :]                                           # B, vocab_size
             
-            logits = logits.view(B*c_block_size, -1)
             probs = F.softmax(logits, dim = -1)
-            ix = torch.multinomial(probs, num_samples = 1)
-            ix = ix.view(B, c_block_size)
+            next_ix = torch.multinomial(probs, num_samples = 1)                 # B, 1
 
-            attention_mask_slided = []
-            out_end_ix = []
-            for b in ix:
-                end_ix = len(b) - 1
-                for j, element in enumerate(b):
-                    if element in [77, 78]:
-                        end_ix = j
-                        break
-                out_end_ix.append(end_ix)
-                if end_ix == config.c_block_size - 1:
-                    attn_mask_vec = torch.ones((config.c_block_size,), dtype = torch.long, device = config.device)
-                else:
-                    ones = torch.ones((end_ix+1,), dtype = torch.long, device = config.device)
-                    zeros = torch.zeros((config.c_block_size - (end_ix + 1),), dtype = torch.long, device = config.device)
-                    attn_mask_vec = torch.cat((ones, zeros), dim = 0)
-                attention_mask_slided.append(attn_mask_vec) 
+            last_word_last_ix = attention_mask.sum(-1)-1
+            last_word_last_ix = last_word_last_ix[0][-1]
+            
+            if x[:, -1, last_word_last_ix] in torch.arange(62, 99, dtype = torch.long, device = config.device) or last_word_last_ix == config.c_block_size - 1:
+                pad_vec = torch.full((1, config.c_block_size-1), config.pad_token, dtype = torch.long, device = config.device)
+                next_ix = torch.cat((next_ix, pad_vec), dim = -1) 
+                next_ix_attention_mask = (next_ix != config.pad_token).int()
+                  
+                x = torch.cat((x, next_ix.unsqueeze(0)), dim = 1)
+                attention_mask = torch.cat((attention_mask, next_ix_attention_mask.unsqueeze(0)), dim = 1)
+                 
+            else:
+                x[:, -1, last_word_last_ix+1] = next_ix[0]
+                attention_mask[:, -1, last_word_last_ix+1] = 1
                 
-            out_end_ix = torch.tensor(out_end_ix, dtype = torch.long, device = config.device).unsqueeze(1)  # B, W
-            in_end_ix = torch.cat((in_end_ix, out_end_ix), dim = 1)  # B, W+1
-            attention_mask_slided = torch.stack(attention_mask_slided, dim = 0).unsqueeze(1)  # B, W, c_block_size
-             
-            ix = ix.unsqueeze(1)                        # B, W, c_block_size 
-            x = torch.cat((x, ix), dim = 1)             # Concatenate along the word dimension
-            attention_mask = torch.cat((attention_mask, attention_mask_slided), dim = 1)
-        return x, in_end_ix
+        return x, attention_mask
 
         
+
+
+
 
 
 # Model Initialization  
@@ -338,6 +362,8 @@ model = GPT()
 model = model.to(config.device)  
 print("-"*70, "\nMODEL INFO:\n", "-"*70)
 print(f"model parameters : \t{sum([p.nelement() for p in model.parameters()]) / 1e6 : .3f}M parameters\n\n")   
+
+
 
 
 
@@ -354,7 +380,8 @@ for iter in range(config.max_iters):
         
     ## Forward pass
     xb, yb = get_batch('train')
-    logits, loss = model(xb, targets = yb)
+    attention_mask = (xb != config.pad_token).int()
+    logits, loss = model(xb, attention_mask = attention_mask, targets = yb)
     
     ## Backward pass
     optimizer.zero_grad(set_to_none = True)
@@ -364,7 +391,7 @@ for iter in range(config.max_iters):
     optimizer.step()
 
 t2 = time.time()
-print("Time taken:\t", (t2-t1), "s\t", (t2-t1)/60, "m")
+print("Time taken:\t", (t2-t1), "s\t", (t2-t1)/60, "m", "\n\n")
 
 
 
@@ -373,16 +400,15 @@ print("Time taken:\t", (t2-t1), "s\t", (t2-t1)/60, "m")
 # Inference
 for i in range(2):
     x = torch.cat((torch.tensor([45, 7, 4, 77], dtype = torch.long, device = config.device), torch.full((20, ), config.pad_token, device = config.device)), dim = -1).unsqueeze(0).unsqueeze(0)
-    in_end_ix = torch.tensor([3], dtype = torch.long, device = config.device).unsqueeze(1)  # B, W
     attention_mask = (x != config.pad_token).int()
-    out, out_end_ix = model.generate(x, attention_mask, in_end_ix, 15)  # B, W, c
+    out, out_attention_mask = model.generate(x, attention_mask, 100)  # B, W, c
     
     ## Decode
     print(f"SAMPLE {i}: ")
     for m, sample in enumerate(out):
         for n, word in enumerate(sample):
-            end_ix = out_end_ix[m, n]
+            end_ix = out_attention_mask[m, n].sum(-1)-1
             print(decode(word[:end_ix+1].tolist()), end = '')
     print("\n\n")
-'''
+
   
