@@ -29,15 +29,15 @@ class Config:
     n_hidden = 4*n_embd
     n_heads = 2
     n_layers = 2
-    c_block_size = 24        # The longest word in the shakesphere dataset.
+    c_block_size = 6        # The longest word in the shakesphere dataset.
     w_block_size = 16
     dropout_ratio = 0.2
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     pad_token = vocab.stoi['<pad>']
     lr = 4e-3
-    max_iters = 2001
+    max_iters = 1001
     eval_iters = 200
-    eval_interval = 200
+    eval_interval = 100
 
 
 
@@ -47,15 +47,15 @@ def get_batch(mode):
     else:
         x = val_data
 
-    x_c_block_size = torch.randint(1, config.c_block_size + 1, (1,)).item()
+    #x_c_block_size = torch.randint(1, config.c_block_size + 1, (1,)).item()
     
     '''if x_c_block_size >= y_c_block_size:
         ixs = torch.randint(0, len(x) - ((w_block_size+1)*x_c_block_size) + 1, (config.batch_size, ))
     else:
         ixs = torch.randint(0, len(x) - ((w_block_size+1)*y_c_block_size) + 1, (config.batch_size, ))'''
-    ixs = torch.randint(0, len(x) - ((config.w_block_size+1)*x_c_block_size) + 1, (config.batch_size, ))
+    ixs = torch.randint(0, len(x) - ((config.w_block_size+1)*config.c_block_size) + 1, (config.batch_size, ))
         
-    xb = [x[ix : ix + (config.w_block_size*x_c_block_size)].view(config.w_block_size, x_c_block_size) for ix in ixs]
+    xb = [x[ix : ix + (config.w_block_size*config.c_block_size)].view(config.w_block_size, config.c_block_size) for ix in ixs]
     
     '''if x_c_block_size == y_c_block_size:
         yb = [x[ix+x_c_block_size : (ix+x_c_block_size) + (w_block_size*y_c_block_size)].view(w_block_size, y_c_block_size) for ix in ixs]
@@ -64,19 +64,19 @@ def get_batch(mode):
     yb = []
     for ix in ixs:
         targets = []
-        target_ix = ix + x_c_block_size
+        target_ix = ix + config.c_block_size
         for v in range(config.w_block_size):
             target = x[target_ix]
             targets.append(target)
-            target_ix += x_c_block_size
+            target_ix += config.c_block_size
         yb.append(torch.stack(targets, dim = 0))
 
     xb = torch.stack(xb, dim = 0)
     yb = torch.stack(yb, dim = 0)
     
-    x_diff = config.c_block_size - x_c_block_size
+    x_diff = config.c_block_size - config.c_block_size
     
-    if config.c_block_size - x_c_block_size != 0:
+    if config.c_block_size - config.c_block_size != 0:
         pad_toks = torch.full((config.batch_size, config.w_block_size, x_diff), config.pad_token, dtype = torch.long)
         xb = torch.cat((xb, pad_toks), dim = -1)
     
@@ -157,8 +157,6 @@ class CharAttention(nn.Module):
         
     def forward(self, x, attention_mask):
         B, W, c, C = x.shape
-
-        x = x * attention_mask.unsqueeze(-1)  # B, W, c, C
         
         qkv = self.attn(x)
         q, k, v = qkv.split(config.n_embd, dim = -1)
@@ -300,12 +298,7 @@ class GPT(nn.Module):
 
 
         # Taking last char of each word which represents the word
-        last_ix = attention_mask.sum(-1)-1
-        last_ix = F.one_hot(last_ix, num_classes = config.c_block_size).unsqueeze(-1)
-
-        x = x*last_ix
-        x = x.sum(-2)                                                                           # B, W, C           
-        x = x + w_pos_emb.unsqueeze(0)
+        x = x[:, :, -1, :]                  # B, W, C
 
 
         for block in self.w_h:
@@ -337,7 +330,7 @@ class GPT(nn.Module):
             last_word_last_ix = attention_mask.sum(-1)-1
             last_word_last_ix = last_word_last_ix[0][-1]
             
-            if x[:, -1, last_word_last_ix] in torch.arange(62, 99, dtype = torch.long, device = config.device) or last_word_last_ix == config.c_block_size - 1:
+            if last_word_last_ix == config.c_block_size - 1:
                 pad_vec = torch.full((1, config.c_block_size-1), config.pad_token, dtype = torch.long, device = config.device)
                 next_ix = torch.cat((next_ix, pad_vec), dim = -1) 
                 next_ix_attention_mask = (next_ix != config.pad_token).int()
@@ -399,7 +392,7 @@ print("Time taken:\t", (t2-t1), "s\t", (t2-t1)/60, "m", "\n\n")
 
 # Inference
 for i in range(2):
-    x = torch.cat((torch.tensor([45, 7, 4, 77], dtype = torch.long, device = config.device), torch.full((20, ), config.pad_token, device = config.device)), dim = -1).unsqueeze(0).unsqueeze(0)
+    x = torch.tensor([78, 99, 99, 99, 99, 99], dtype = torch.long, device = config.device).unsqueeze(0).unsqueeze(0)
     attention_mask = (x != config.pad_token).int()
     out, out_attention_mask = model.generate(x, attention_mask, 100)  # B, W, c
     
