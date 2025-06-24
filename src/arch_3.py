@@ -23,9 +23,9 @@ torch.manual_seed(1337)
 
 @dataclass
 class Config:
-    batch_size = 8
+    batch_size = 4
     vocab_size = len(vocab.itos) 
-    n_embd = 64
+    n_embd = 32
     n_hidden = 4*n_embd
     n_heads = 2
     n_layers = 2

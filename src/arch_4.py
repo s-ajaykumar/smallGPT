@@ -1,7 +1,6 @@
 '''
-multilayer char attention
-In char attention - Bidirectional attention is used
-multilayer word attention
+multilayer char attention - last char of each word is attended to all the chars previous to it. Its like each word attending to all the chars of prev words.
+In char attention - unidirectional attention is used
 tied weights - Character embedding and lm head are tied - same matrix is used.
 After the final projection, out is added with character and word positional embeddings.
 '''
@@ -11,7 +10,6 @@ After the final projection, out is added with character and word positional embe
 import vocab as vocab
 
 import re
-import random
 import time
 from dataclasses import dataclass
 
@@ -23,21 +21,21 @@ torch.manual_seed(1337)
 
 @dataclass
 class Config:
-    batch_size = 2
+    #batch_size = 2
     vocab_size = len(vocab.itos) 
     n_embd = 32
     n_hidden = 4*n_embd
     n_heads = 2
     n_layers = 2
     c_block_size = 24        # The longest word in the shakesphere dataset.
-    w_block_size = 3
+    w_block_size = 16
     dropout_ratio = 0.2
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     pad_token = vocab.stoi['<pad>']
     lr = 4e-3
-    max_iters = 1001
+    max_iters = 4001
     eval_iters = 200
-    eval_interval = 100
+    eval_interval = 400
 
 
 
@@ -233,7 +231,8 @@ class GPT(nn.Module):
         self.c_h = nn.ModuleList([C_Block() for _ in range(config.n_layers)])
         
         self.proj = nn.Linear(config.n_embd, config.c_block_size*config.n_embd)
-        self.ln = nn.LayerNorm(config.n_embd)
+        self.ln_1 = nn.LayerNorm(config.n_embd)
+        self.ln_2 = nn.LayerNorm(config.n_embd)
 
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias = False)
         
@@ -257,7 +256,6 @@ class GPT(nn.Module):
         
     def forward(self, x, targets = None, attention_mask = None):
         c = len(x)
-        print(x.shape, c, attention_mask.shape, attention_mask)
         c_emb = self.cte(x)                                                                 #W*c, C
         c_pos_emb = self.cpe(torch.arange(c, dtype = torch.long, device = config.device)) 
         x = c_emb + c_pos_emb       
@@ -265,14 +263,16 @@ class GPT(nn.Module):
         for block in self.c_h:
             words, x = block(x, attention_mask)            
 
+        W, C = words.shape
+        c_pos_emb = self.cpe(torch.arange(config.c_block_size, dtype = torch.long, device = config.device))
+        w_pos_emb = self.wpe(torch.arange(W, dtype = torch.long, device = config.device))
+        x = self.proj(self.ln_1(words)).view(-1, config.c_block_size, config.n_embd)               
+        x = x + c_pos_emb.unsqueeze(0)
+        x = x + w_pos_emb.unsqueeze(1)
 
-        x = self.proj(words).view(-1, config.c_block_size, config.n_embd)               
-        #x = x + c_pos_emb
-        #x = x + w_pos_emb.unsqueeze(1)
-
-        #x = self.ln(x)                
-        #logits = x @ self.cte.weight.T  + self.b
-        logits = self.lm_head(self.ln(x))                                      
+        x = self.ln_2(x)                
+        logits = x @ self.cte.weight.T 
+        #logits = self.lm_head(self.ln_2(x))                                      
         loss = None
 
         if targets is not None:
@@ -291,7 +291,6 @@ class GPT(nn.Module):
                 x_slided = x_slided[attention_mask_slided[0]+1:]
                 length_of_1st_word = attention_mask_slided[0] + 1
                 attention_mask_slided = attention_mask_slided[1:] - length_of_1st_word
-                
             logits, loss = self(x_slided, attention_mask = attention_mask_slided)
             logits = logits[-1, :, :]
             c_block_size, vocab_size = logits.shape
@@ -305,7 +304,7 @@ class GPT(nn.Module):
                     end_ix = j
                     break
             next_word = ix[:end_ix+1].view(-1)
-            next_word_attention_mask = torch.tensor([len(next_word) + attention_mask[-1]], dtype = torch.long, device = config.device)
+            next_word_attention_mask = torch.tensor([len(next_word) + attention_mask_slided[-1]], dtype = torch.long, device = config.device)
             x = torch.cat((x, next_word), dim = 0)
             attention_mask = torch.cat((attention_mask, next_word_attention_mask), dim = 0)
             x_slided = torch.cat((x_slided, next_word), dim = 0)
@@ -324,7 +323,7 @@ print("-"*70, "\nMODEL INFO:\n", "-"*70)
 print(f"model parameters : \t{sum([p.nelement() for p in model.parameters()]) / 1e6 : .3f}M parameters\n\n") 
 
 
-'''# Model Training
+# Model Training
 optimizer = torch.optim.AdamW(model.parameters(), lr = config.lr)
 
 t1 = time.time()
@@ -345,7 +344,7 @@ for iter in range(config.max_iters):
     optimizer.step()
 
 t2 = time.time()
-print("Time taken:\t", (t2-t1), "s\t", (t2-t1)/60, "m")'''
+print("Time taken:\t", (t2-t1), "s\t", (t2-t1)/60, "m")
 
 
 
